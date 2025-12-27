@@ -93,9 +93,10 @@ android/*.iml
 android/app/*.iml
 
 # -------------------------------------------
-# Android Native Libraries (too large for GitHub)
+# Android Native Libraries
+# liblo-native-code.so is tracked by Git LFS
 # -------------------------------------------
-android/app/src/main/jniLibs/
+# (No exclusions needed - LFS handles the large file)
 
 # -------------------------------------------
 # Keystore (security - never commit!)
