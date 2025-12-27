@@ -1,0 +1,94 @@
+{
+  "name": "autowriter",
+  "version": "1.0.0",
+  "description": "Document Template Filler App",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "electron": "electron .",
+    "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "electron:build": "vite build && electron-builder"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.0.0",
+    "@capacitor/app": "^8.0.0",
+    "@capacitor/browser": "^8.0.0",
+    "@capacitor/camera": "^8.0.0",
+    "@capacitor/cli": "^8.0.0",
+    "@capacitor/core": "^8.0.0",
+    "@capacitor/filesystem": "^8.0.0",
+    "@capacitor/share": "^8.0.0",
+    "@capacitor/splash-screen": "^8.0.0",
+    "@capawesome/capacitor-file-picker": "^8.0.0",
+    "canvas": "^3.2.0",
+    "docx-preview": "^0.3.7",
+    "docx2pdf-converter": "^2.1.1",
+    "docxtemplater": "^3.46.0",
+    "html2canvas": "^1.4.1",
+    "html2pdf.js": "^0.10.1",
+    "jspdf": "^3.0.4",
+    "mammoth": "^1.11.0",
+    "pdf-poppler": "^0.2.3",
+    "pdfjs-dist": "^5.4.449",
+    "pizzip": "^3.1.7",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@vitejs/plugin-react": "^4.2.0",
+    "concurrently": "^8.2.0",
+    "electron": "^28.3.3",
+    "electron-builder": "^24.9.0",
+    "png-to-ico": "^3.0.1",
+    "sharp": "^0.34.5",
+    "vite": "^5.0.0",
+    "wait-on": "^7.2.0"
+  },
+  "build": {
+    "appId": "com.autowriter.app",
+    "productName": "كاتب المستندات",
+    "executableName": "كاتب المستندات",
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "ref/**/*",
+      "!node_modules/**/*",
+      "node_modules/pizzip/**/*",
+      "node_modules/docxtemplater/**/*",
+      "node_modules/pdf-poppler/**/*",
+      "node_modules/canvas/**/*"
+    ],
+    "asarUnpack": [
+      "electron/**/*",
+      "ref/**/*",
+      "node_modules/pdf-poppler/**/*",
+      "node_modules/canvas/**/*"
+    ],
+    "directories": {
+      "output": "build_temp"
+    },
+    "compression": "maximum",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "electron/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "AutoWriter-${version}-Setup.${ext}",
+      "shortcutName": "كاتب المستندات"
+    }
+  }
+}

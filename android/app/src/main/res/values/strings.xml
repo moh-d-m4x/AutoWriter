@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">كاتب المستندات</string>
+    <string name="title_activity_main">كاتب المستندات</string>
+    <string name="package_name">com.autowriter.app</string>
+    <string name="custom_url_scheme">com.autowriter.app</string>
+</resources>

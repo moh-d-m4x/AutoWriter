@@ -1,0 +1,111 @@
+# ===========================================
+# AutoWriter Project - .gitignore
+# ===========================================
+
+# -------------------------------------------
+# Dependencies (downloaded via npm install)
+# -------------------------------------------
+node_modules/
+.pnp
+.pnp.js
+package-lock.json
+
+# -------------------------------------------
+# Build Outputs
+# -------------------------------------------
+dist/
+dist-electron/
+release/
+out/
+build/
+build_temp/
+
+# -------------------------------------------
+# APK Files (large binary files)
+# -------------------------------------------
+*.apk
+*.xapk
+
+# -------------------------------------------
+# Development Resources (not needed in repo)
+# -------------------------------------------
+dev_resources/
+
+# -------------------------------------------
+# LibreOffice Assets (users extract from xapk)
+# -------------------------------------------
+assets/
+lib/
+
+# -------------------------------------------
+# Development Scripts (personal tools)
+# -------------------------------------------
+extract_table.js
+inspect_docx.js
+table_dump.xml
+autowriter_icon_xml.xml
+
+# -------------------------------------------
+# Environment Variables
+# -------------------------------------------
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# -------------------------------------------
+# Logs
+# -------------------------------------------
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# -------------------------------------------
+# Editor / IDE
+# -------------------------------------------
+.vscode/
+.idea/
+*.suo
+*.ntvs
+*.njsproj
+*.sln
+*.sw?
+
+# -------------------------------------------
+# System Files
+# -------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# -------------------------------------------
+# Android Build (Capacitor generated)
+# -------------------------------------------
+android/.gradle/
+android/app/build/
+android/capacitor-cordova-android-plugins/build/
+android/build/
+android/.idea/
+android/local.properties
+android/*.iml
+android/app/*.iml
+
+# -------------------------------------------
+# Android Native Libraries (too large for GitHub)
+# -------------------------------------------
+android/app/src/main/jniLibs/
+
+# -------------------------------------------
+# Keystore (security - never commit!)
+# -------------------------------------------
+*.keystore
+*.jks
+
+# -------------------------------------------
+# Temporary Files
+# -------------------------------------------
+*.tmp
+*.temp
+~$*
