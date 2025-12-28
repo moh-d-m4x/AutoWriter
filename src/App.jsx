@@ -421,6 +421,7 @@ function App() {
                             ...prev,
                             show: false, images: [], currentPage: 0, zoom: 1.0, panX: 0, panY: 0, isLoading: false
                         }));
+                        setAddedImages([]); // Clear added images when closing preview
                         return;
                     }
 
@@ -2301,6 +2302,7 @@ function App() {
 
     const closePreview = () => {
         setPreviewState({ show: false, images: [], currentPage: 0, zoom: 1.0, panX: 0, panY: 0, isLoading: false });
+        setAddedImages([]); // Clear added images when closing preview
     };
 
     // Mouse wheel zoom handler (Zoom to Mouse)
