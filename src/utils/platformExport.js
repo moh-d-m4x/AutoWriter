@@ -332,9 +332,98 @@ export const clearCacheAndroid = async () => {
     return { success: false, error: 'Not on Android' };
 };
 
+/**
+ * Convert document to image FILES (returns paths, not Base64)
+ * Uses file-path based processing to avoid memory issues with large PDFs
+ * @param {Uint8Array} docxBuffer - Document buffer
+ * @param {string} subjectName - Base name for output files
+ * @param {function} onProgress - Callback(current, total, percent)
+ * @returns {Promise<{success: boolean, paths?: string[], count?: number, error?: string}>}
+ */
+export const convertToImageFiles = async (docxBuffer, subjectName = '', onProgress = null) => {
+    if (!isAndroid()) {
+        return { success: false, error: 'Only supported on Android' };
+    }
+
+    const safeName = sanitizeFileName(subjectName) || 'page';
+    let extension = '.docx';
+    if (subjectName && subjectName.lastIndexOf('.') !== -1) {
+        extension = subjectName.substring(subjectName.lastIndexOf('.'));
+    }
+
+    try {
+        // Register progress listener if callback provided
+        let progressListener = null;
+        if (onProgress) {
+            progressListener = await LOKPlugin.addListener('conversionProgress', (data) => {
+                onProgress(data.current, data.total, data.percent);
+            });
+        }
+
+        const base64 = arrayToBase64(docxBuffer);
+        const result = await LOKPlugin.convertToImageFiles({
+            docxBuffer: base64,
+            baseName: safeName,
+            extension: extension
+        });
+
+        // Remove listener
+        if (progressListener) {
+            progressListener.remove();
+        }
+
+        if (result.success && result.paths) {
+            return {
+                success: true,
+                paths: Array.isArray(result.paths) ? result.paths : [],
+                count: result.count
+            };
+        } else {
+            return { success: false, error: result.error || 'Conversion failed' };
+        }
+    } catch (error) {
+        console.error('convertToImageFiles error:', error);
+        return { success: false, error: error.message };
+    }
+};
+
+/**
+ * Get single image as Base64 from file path
+ * @param {string} path - File path to image
+ * @returns {Promise<string|null>} Base64 string or null
+ */
+export const getImageBase64ByPath = async (path) => {
+    if (!isAndroid()) return null;
+
+    try {
+        const result = await LOKPlugin.getImageAsBase64({ path });
+        return result.success ? result.data : null;
+    } catch (error) {
+        console.error('getImageBase64ByPath error:', error);
+        return null;
+    }
+};
+
+/**
+ * Delete temporary image files
+ * @param {string[]} paths - Array of file paths to delete
+ */
+export const cleanupImageFiles = async (paths) => {
+    if (!isAndroid() || !paths || paths.length === 0) return;
+
+    try {
+        await LOKPlugin.deleteImageFiles({ paths });
+    } catch (error) {
+        console.error('cleanupImageFiles error:', error);
+    }
+};
+
 export default {
     convertToPdf,
     convertToImage,
+    convertToImageFiles,
+    getImageBase64ByPath,
+    cleanupImageFiles,
     saveFileAndroid,
     saveToCacheAndroid,
     shareFileAndroid,
@@ -392,30 +481,73 @@ export const pickImagesAndroid = async (multiple = true) => {
     return [];
 };
 
-// Pick Files (Android) - supports images, Word docs, and PDFs
+// Pick Files (Android) - supports images, Word docs, Excel, PowerPoint, and PDFs
+// Two-step process: pick without data → filter by extension → read only supported files
+// Returns { files: [], skippedCount: number }
 export const pickFilesAndroid = async (multiple = true) => {
     if (isAndroid()) {
         try {
             const { FilePicker } = await import('@capawesome/capacitor-file-picker');
+
+            // Supported extensions
+            const supportedDocs = ['.docx', '.doc', '.pptx', '.ppt', '.xlsx', '.xls', '.pdf'];
+            const supportedImages = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'];
+
+            // Step 1: Pick files WITHOUT reading data (fast - only gets metadata)
             const result = await FilePicker.pickFiles({
                 multiple: multiple,
-                readData: true,
+                readData: false,
                 types: [
                     'image/*',
                     'application/pdf',
                     'application/msword',
                     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
                     'application/vnd.ms-powerpoint',
-                    'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+                    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+                    'application/vnd.ms-excel',
+                    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                 ]
             });
-            return result.files;
+
+            // Step 2: Filter by extension (skip unsupported like videos)
+            const supportedFiles = [];
+            let skippedCount = 0;
+
+            for (const file of result.files) {
+                const name = (file.name || '').toLowerCase();
+                const isSupported = supportedDocs.some(ext => name.endsWith(ext)) ||
+                    supportedImages.some(ext => name.endsWith(ext));
+
+                if (isSupported) {
+                    supportedFiles.push(file);
+                } else {
+                    skippedCount++;
+                }
+            }
+
+            // Step 3: Read data ONLY for supported files
+            const { Filesystem } = await import('@capacitor/filesystem');
+            const filesWithData = [];
+
+            for (const file of supportedFiles) {
+                try {
+                    const fileData = await Filesystem.readFile({ path: file.path });
+                    filesWithData.push({
+                        ...file,
+                        data: fileData.data
+                    });
+                } catch (readError) {
+                    console.error('Error reading file:', file.name, readError);
+                }
+            }
+
+            return { files: filesWithData, skippedCount };
         } catch (e) {
             console.error('FilePicker pickFiles error:', e);
             throw e;
         }
     }
-    return [];
+    return { files: [], skippedCount: 0 };
 };
 
 // Open Browser (Android)

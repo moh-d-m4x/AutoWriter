@@ -102,28 +102,61 @@ public class MainActivity extends BridgeActivity {
         processedIntentUris.add(uriString);
 
         try {
+            // Get MIME type first to filter unsupported files BEFORE loading
+            String mime = getContentResolver().getType(imageUri);
+
+            // Supported MIME types - skip loading unsupported files to prevent OOM
+            java.util.Set<String> supportedMimes = new java.util.HashSet<>(java.util.Arrays.asList(
+                    "image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif", "image/bmp",
+                    "application/pdf",
+                    "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    "application/vnd.ms-powerpoint",
+                    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
+
+            boolean isSupported = false;
+            if (mime != null) {
+                // Check if MIME type starts with "image/" or matches exact supported types
+                if (mime.startsWith("image/") || supportedMimes.contains(mime)) {
+                    isSupported = true;
+                }
+            }
+
+            if (!isSupported) {
+                android.util.Log.d("MainActivity", "Skipping unsupported file type: " + mime);
+                return; // Skip without loading to prevent OOM
+            }
+
             java.io.InputStream is = getContentResolver().openInputStream(imageUri);
             java.io.File cacheDir = getCacheDir();
 
-            // Try to convert mime to extension
-            String mime = getContentResolver().getType(imageUri);
+            // Convert MIME to extension
             String ext = ".bin"; // Default
-
             if (mime != null) {
                 if (mime.contains("image/png"))
                     ext = ".png";
-                else if (mime.contains("image/jpeg"))
+                else if (mime.contains("image/jpeg") || mime.contains("image/jpg"))
                     ext = ".jpg";
                 else if (mime.contains("image/webp"))
                     ext = ".webp";
+                else if (mime.contains("image/gif"))
+                    ext = ".gif";
+                else if (mime.contains("image/bmp"))
+                    ext = ".bmp";
                 else if (mime.contains("wordprocessingml") || mime.contains("docx"))
                     ext = ".docx";
                 else if (mime.contains("msword") || mime.contains("doc"))
                     ext = ".doc";
+                else if (mime.contains("presentationml") || mime.contains("pptx"))
+                    ext = ".pptx";
+                else if (mime.contains("ms-powerpoint") || mime.contains("ppt"))
+                    ext = ".ppt";
+                else if (mime.contains("spreadsheetml") || mime.contains("xlsx"))
+                    ext = ".xlsx";
+                else if (mime.contains("ms-excel") || mime.contains("xls"))
+                    ext = ".xls";
                 else if (mime.contains("pdf"))
                     ext = ".pdf";
-                else if (mime.contains("text/plain"))
-                    ext = ".txt";
             }
 
             // Generate filename with correct extension

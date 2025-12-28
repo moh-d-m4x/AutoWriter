@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import PizZip from 'pizzip'
 import {
-    isElectron, isAndroid, convertToPdf, convertToImage,
+    isElectron, isAndroid, convertToPdf, convertToImage, convertToImageFiles,
+    getImageBase64ByPath, cleanupImageFiles,
     saveFileAndroid, saveToCacheAndroid, shareFileAndroid, saveMultipleFilesAndroid,
     checkForSharedImage, pickImagesAndroid, pickFilesAndroid, openBrowserAndroid, addAppListenerAndroid,
     exitAppAndroid, clearCacheAndroid
@@ -56,9 +57,14 @@ function App() {
     // Export loading state
     const [isExporting, setIsExporting] = useState(false);
     const [exportFormat, setExportFormat] = useState(null); // Track current export format
+    const [exportProgress, setExportProgress] = useState(0); // Progress percentage (0-100)
+    const [fileProgress, setFileProgress] = useState({ current: 0, total: 0 }); // Multi-file progress (1/3, 2/3)
 
     // Export cancellation ref (mutable, survives re-renders)
     const exportCancelledRef = useRef(false);
+
+    // Temp image paths for cleanup (file-path based processing)
+    const tempImagePathsRef = useRef([]);
 
     // Combine image pages option (default: false = separate images)
     const [combineImagePages, setCombineImagePages] = useState(false);
@@ -302,6 +308,20 @@ function App() {
                 if (sharedItems && sharedItems.length > 0) {
                     const finalImages = [];
                     let hasConverted = false;
+                    let skippedCount = 0;
+
+                    // Supported file extensions
+                    const supportedDocs = ['.docx', '.doc', '.pptx', '.ppt', '.xlsx', '.xls', '.pdf'];
+                    const supportedImages = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'];
+
+                    // Count document files for progress tracking
+                    const docFiles = sharedItems.filter(item => {
+                        if (typeof item === 'string') return false;
+                        const name = (item.name || '').toLowerCase();
+                        return supportedDocs.some(ext => name.endsWith(ext));
+                    });
+                    const totalDocs = docFiles.length;
+                    let currentDoc = 0;
 
                     for (const item of sharedItems) {
                         // Legacy string format
@@ -311,12 +331,23 @@ function App() {
                         // New object format
                         else if (item.data && item.name) {
                             const name = item.name.toLowerCase();
+                            const isDoc = supportedDocs.some(ext => name.endsWith(ext));
+                            const isImage = supportedImages.some(ext => name.endsWith(ext));
 
-                            // Handle Word Documents, PowerPoint, and PDF
-                            if (name.endsWith('.docx') || name.endsWith('.doc') || name.endsWith('.pptx') || name.endsWith('.ppt') || name.endsWith('.pdf')) {
+                            // Skip unsupported files
+                            if (!isDoc && !isImage) {
+                                skippedCount++;
+                                continue;
+                            }
+
+                            // Handle Word Documents, PowerPoint, Excel, and PDF
+                            if (isDoc) {
+                                currentDoc++;
                                 hasConverted = true;
                                 setIsExporting(true);
                                 setExportFormat('docx-conversion');
+                                setExportProgress(0);
+                                setFileProgress({ current: currentDoc, total: totalDocs });
 
                                 // Convert Base64 to Uint8Array
                                 const binaryString = window.atob(item.data);
@@ -325,31 +356,43 @@ function App() {
                                     bytes[i] = binaryString.charCodeAt(i);
                                 }
 
-                                // Convert DOCX to Images
-                                const result = await convertToImage(bytes, false, item.name); // combinePages=false
+                                // Use new file-path based conversion with progress
+                                const result = await convertToImageFiles(bytes, item.name, (current, total, percent) => {
+                                    setExportProgress(percent);
+                                });
 
-                                if (result.success && result.images) {
-                                    for (const imgBuffer of result.images) {
-                                        // Buffer to Base64
-                                        let binary = '';
-                                        const len = imgBuffer.byteLength;
-                                        for (let i = 0; i < len; i++) {
-                                            binary += String.fromCharCode(imgBuffer[i]);
+                                if (result.success && result.paths && result.paths.length > 0) {
+                                    // Store paths for cleanup later
+                                    tempImagePathsRef.current = result.paths;
+
+                                    // Load images one by one from file paths
+                                    for (const path of result.paths) {
+                                        const base64 = await getImageBase64ByPath(path);
+                                        if (base64) {
+                                            finalImages.push(`data:image/png;base64,${base64}`);
                                         }
-                                        finalImages.push(`data:image/png;base64,${btoa(binary)}`);
                                     }
                                 } else {
-                                    showToast('فشل تحويل الملف', 'error');
+                                    showToast(result.error || 'فشل تحويل الملف', 'error');
                                 }
                                 setIsExporting(false);
-                            } else {
-                                // Assume Image
+                                setExportProgress(0);
+                                setFileProgress({ current: 0, total: 0 });
+                            } else if (isImage) {
+                                // Supported Image
                                 let mime = 'image/png';
                                 if (name.endsWith('.jpg') || name.endsWith('.jpeg')) mime = 'image/jpeg';
                                 if (name.endsWith('.webp')) mime = 'image/webp';
+                                if (name.endsWith('.gif')) mime = 'image/gif';
+                                if (name.endsWith('.bmp')) mime = 'image/bmp';
                                 finalImages.push(`data:${mime};base64,${item.data}`);
                             }
                         }
+                    }
+
+                    // Show notification about skipped unsupported files
+                    if (skippedCount > 0) {
+                        showToast(`تم تجاهل ${skippedCount} ${skippedCount > 1 ? 'ملفات غير مدعومة' : 'ملف غير مدعوم'}`, 'error');
                     }
 
                     if (finalImages.length > 0) {
@@ -365,6 +408,12 @@ function App() {
                         });
                         if (hasConverted) showToast('تم تحويل الملف بنجاح', 'success');
                         else showToast(`تم استلام ${finalImages.length > 1 ? finalImages.length + ' صور' : 'صورة'}`, 'success');
+
+                        // Cleanup temp image files after loading into memory
+                        if (tempImagePathsRef.current.length > 0) {
+                            cleanupImageFiles(tempImagePathsRef.current);
+                            tempImagePathsRef.current = [];
+                        }
                     }
                 }
             } catch (e) {
@@ -465,10 +514,19 @@ function App() {
 
     // Handle logo selection
     const handleLogoSelect = async () => {
+        // Supported image extensions
+        const supportedImages = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'];
+
         if (window.electronAPI) {
             // Electron (Desktop)
             const result = await window.electronAPI.selectImage();
             if (result) {
+                // Validate file type
+                const ext = result.name ? '.' + result.name.toLowerCase().split('.').pop() : '';
+                if (!supportedImages.includes(ext)) {
+                    showToast('يرجى اختيار ملف صورة فقط (PNG, JPG, WEBP)', 'error');
+                    return;
+                }
                 setFormData(prev => ({
                     ...prev,
                     logo: result.path,
@@ -484,6 +542,16 @@ function App() {
 
                 if (result && result.files && result.files.length > 0) {
                     const file = result.files[0];
+
+                    // Validate file type
+                    const name = (file.name || '').toLowerCase();
+                    const isImage = supportedImages.some(ext => name.endsWith(ext));
+
+                    if (!isImage) {
+                        showToast('يرجى اختيار ملف صورة فقط (PNG, JPG, WEBP)', 'error');
+                        return;
+                    }
+
                     if (file.data) {
                         // Determine format from MIME type
                         const mimeType = file.mimeType || 'image/png';
@@ -539,8 +607,8 @@ function App() {
                         for (const file of result) {
                             const name = file.name.toLowerCase();
 
-                            // Handle Word Documents, PowerPoint, and PDFs
-                            if (name.endsWith('.docx') || name.endsWith('.doc') || name.endsWith('.pptx') || name.endsWith('.ppt') || name.endsWith('.pdf')) {
+                            // Handle Word Documents, PowerPoint, Excel, and PDFs
+                            if (name.endsWith('.docx') || name.endsWith('.doc') || name.endsWith('.pptx') || name.endsWith('.ppt') || name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.pdf')) {
                                 hasConverted = true;
 
                                 // Convert Base64 to Uint8Array
@@ -628,18 +696,42 @@ function App() {
         setShowSourceDialog(false);
         try {
             let newImages = [];
-            const files = await pickFilesAndroid(true);
+            // pickFilesAndroid now returns { files, skippedCount }
+            const result = await pickFilesAndroid(true);
+            const files = result.files || [];
+            const skippedCount = result.skippedCount || 0;
+
+            // Show notification about skipped unsupported files
+            if (skippedCount > 0) {
+                showToast(`تم تجاهل ${skippedCount} ${skippedCount > 1 ? 'ملفات غير مدعومة' : 'ملف غير مدعوم'}`, 'error');
+            }
+
             if (files && files.length > 0) {
                 let hasConverted = false;
 
+                // Supported file extensions
+                const supportedDocs = ['.docx', '.doc', '.pptx', '.ppt', '.xlsx', '.xls', '.pdf'];
+
+                // Count document files for progress tracking
+                const docFiles = files.filter(file => {
+                    const name = (file.name || '').toLowerCase();
+                    return supportedDocs.some(ext => name.endsWith(ext));
+                });
+                const totalDocs = docFiles.length;
+                let currentDoc = 0;
+
                 for (const file of files) {
                     const name = (file.name || '').toLowerCase();
+                    const isDoc = supportedDocs.some(ext => name.endsWith(ext));
 
-                    // Handle Word Documents, PowerPoint, and PDF
-                    if (name.endsWith('.docx') || name.endsWith('.doc') || name.endsWith('.pptx') || name.endsWith('.ppt') || name.endsWith('.pdf')) {
+                    // Handle Word Documents, PowerPoint, Excel, and PDF
+                    if (isDoc) {
+                        currentDoc++;
                         hasConverted = true;
                         setIsExporting(true);
                         setExportFormat('docx-conversion');
+                        setExportProgress(0);
+                        setFileProgress({ current: currentDoc, total: totalDocs });
 
                         // Convert Base64 to Uint8Array
                         const binaryString = window.atob(file.data);
@@ -648,25 +740,29 @@ function App() {
                             bytes[i] = binaryString.charCodeAt(i);
                         }
 
-                        // Convert to Images
-                        const result = await convertToImage(bytes, false, file.name);
+                        // Use file-path based conversion with progress
+                        const convResult = await convertToImageFiles(bytes, file.name, (current, total, percent) => {
+                            setExportProgress(percent);
+                        });
 
-                        if (result.success && result.images) {
-                            for (const imgBuffer of result.images) {
-                                // Buffer to Base64
-                                let binary = '';
-                                const len = imgBuffer.byteLength;
-                                for (let i = 0; i < len; i++) {
-                                    binary += String.fromCharCode(imgBuffer[i]);
+                        if (convResult.success && convResult.paths && convResult.paths.length > 0) {
+                            // Load images from file paths
+                            for (const path of convResult.paths) {
+                                const base64 = await getImageBase64ByPath(path);
+                                if (base64) {
+                                    newImages.push(`data:image/png;base64,${base64}`);
                                 }
-                                newImages.push(`data:image/png;base64,${btoa(binary)}`);
                             }
+                            // Cleanup temp files
+                            cleanupImageFiles(convResult.paths);
                         } else {
-                            showToast('فشل تحويل الملف', 'error');
+                            showToast(convResult.error || 'فشل تحويل الملف', 'error');
                         }
                         setIsExporting(false);
+                        setExportProgress(0);
+                        setFileProgress({ current: 0, total: 0 });
                     } else {
-                        // Assume Image
+                        // Image file
                         const mime = file.mimeType || 'image/png';
                         newImages.push(`data:${mime};base64,${file.data}`);
                     }
@@ -2597,34 +2693,6 @@ function App() {
             onDrop={handleFileDrop}
         >
 
-            {/* iOS-style Loading Overlay */}
-            {isExporting && (
-                <div className="loading-overlay">
-                    <div className="loading-content">
-                        <div className="loading-spinner"></div>
-                        <span className="loading-text">جاري التحويل...</span>
-                        {/* Only show cancel button for PDF and Image exports (not Word) */}
-                        {exportFormat !== 'docx' && (
-                            <button
-                                className="cancel-export-btn"
-                                onClick={async () => {
-                                    // Set cancellation flag for all export types
-                                    exportCancelledRef.current = true;
-
-                                    // Also kill any running process (for PDF/Image exports)
-                                    if (window.electronAPI) {
-                                        await window.electronAPI.cancelExport();
-                                    }
-                                    setIsExporting(false);
-                                    showToast('تم إلغاء العملية', 'error');
-                                }}
-                            >
-                                إلغاء
-                            </button>
-                        )}
-                    </div>
-                </div>
-            )}
 
             {/* Custom Confirmation Modal */}
             {confirmModal.show && (
@@ -3162,28 +3230,61 @@ function App() {
                 </svg>
             </button>
 
-            {/* Loading Overlay */}
+            {/* Loading Overlay with Growing Progress Arc */}
             {isExporting && (
                 <div className="loading-overlay">
                     <div className="loading-content">
-                        <div className="loading-spinner"></div>
+                        <div className="loading-progress-container">
+                            {/* SVG Spinner with growing arc */}
+                            <svg className="loading-progress-ring" width="50" height="50" viewBox="0 0 50 50">
+                                {/* Background circle (faint) */}
+                                <circle
+                                    cx="25"
+                                    cy="25"
+                                    r="20"
+                                    fill="none"
+                                    stroke="rgba(255,255,255,0.15)"
+                                    strokeWidth="3"
+                                />
+                                {/* Progress arc - starts small, grows to full circle */}
+                                <circle
+                                    className="loading-progress-arc"
+                                    cx="25"
+                                    cy="25"
+                                    r="20"
+                                    fill="none"
+                                    stroke="white"
+                                    strokeWidth="3"
+                                    strokeLinecap="round"
+                                    strokeDasharray={`${Math.max(10, (exportProgress / 100) * 125.66)} 125.66`}
+                                    transform="rotate(-90 25 25)"
+                                />
+                            </svg>
+                            {/* Percentage text in center */}
+                            {exportProgress > 0 && (
+                                <span className="loading-progress-text">{exportProgress}%</span>
+                            )}
+                        </div>
                         <p className="loading-text">
                             {exportFormat === 'docx-conversion' ? 'جاري فتح الملف...' : 'جاري التصدير...'}
                         </p>
+                        {/* File counter for multiple files */}
+                        {fileProgress.total > 1 && (
+                            <p className="loading-file-counter">
+                                الملف {fileProgress.current} من {fileProgress.total}
+                            </p>
+                        )}
                         {/* Cancel Button - Hidden for DOCX and Conversion */}
                         {exportFormat !== 'docx' && exportFormat !== 'docx-conversion' && (
                             <button
                                 className="cancel-export-btn"
                                 onClick={async () => {
                                     exportCancelledRef.current = true;
-
-                                    // PC: Kill running Electron process
                                     if (isElectron() && window.electronAPI) {
                                         await window.electronAPI.cancelExport();
                                     }
-                                    // Android: Flag is checked by in-process export loop
-
                                     setIsExporting(false);
+                                    setExportProgress(0);
                                     showToast('تم إلغاء التصدير', 'info');
                                 }}
                             >

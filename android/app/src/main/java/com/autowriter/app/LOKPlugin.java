@@ -359,9 +359,30 @@ public class LOKPlugin extends Plugin {
                     org.json.JSONArray imagesArray = new org.json.JSONArray();
                     org.json.JSONArray filesArray = new org.json.JSONArray();
 
+                    // Supported file extensions - must match JavaScript filtering
+                    java.util.Set<String> supportedExtensions = new java.util.HashSet<>(java.util.Arrays.asList(
+                            ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp",
+                            ".pdf", ".docx", ".doc", ".pptx", ".ppt", ".xlsx", ".xls"));
+
                     for (String path : pendingSharedImagePaths) {
                         File imageFile = new File(path);
                         if (imageFile.exists()) {
+                            // Check file extension before loading
+                            String fileName = imageFile.getName().toLowerCase();
+                            String extension = "";
+                            int dotIndex = fileName.lastIndexOf('.');
+                            if (dotIndex > 0) {
+                                extension = fileName.substring(dotIndex);
+                            }
+
+                            // Skip unsupported files to prevent OOM
+                            if (!supportedExtensions.contains(extension)) {
+                                Log.d(TAG, "Skipping unsupported file: " + fileName);
+                                // Clean up the unsupported file
+                                imageFile.delete();
+                                continue;
+                            }
+
                             byte[] imageBytes = readFileToBytes(imageFile);
                             String imageBase64 = Base64.encodeToString(imageBytes, Base64.NO_WRAP);
 
@@ -449,5 +470,163 @@ public class LOKPlugin extends Plugin {
             converter.cleanup();
         }
         Log.d(TAG, "LOKPlugin: Cleaned up");
+    }
+
+    /**
+     * Convert document to image FILES (not Base64)
+     * Returns file paths and emits progress events
+     */
+    @PluginMethod()
+    public void convertToImageFiles(PluginCall call) {
+        Log.d(TAG, "LOKPlugin: convertToImageFiles called");
+
+        String docxBase64 = call.getString("docxBuffer");
+        String baseName = call.getString("baseName", "page");
+
+        if (docxBase64 == null || docxBase64.isEmpty()) {
+            JSObject result = new JSObject();
+            result.put("success", false);
+            result.put("error", "No document data provided");
+            call.resolve(result);
+            return;
+        }
+
+        executor.execute(() -> {
+            try {
+                ensureInitialized();
+
+                if (converter == null || !converter.isReady()) {
+                    throw new Exception("LibreOfficeKit not initialized");
+                }
+
+                byte[] docxBytes = Base64.decode(docxBase64, Base64.DEFAULT);
+                String extension = call.getString("extension", ".docx");
+                if (!extension.startsWith("."))
+                    extension = "." + extension;
+
+                File cacheDir = getContext().getCacheDir();
+                File inputFile = new File(cacheDir, "input_" + System.currentTimeMillis() + extension);
+
+                try (FileOutputStream fos = new FileOutputStream(inputFile)) {
+                    fos.write(docxBytes);
+                }
+
+                // Use converter with progress callback
+                String[] outputPaths = converter.convertToImagesViaPdfWithProgress(
+                        inputFile.getAbsolutePath(),
+                        cacheDir.getAbsolutePath(),
+                        baseName,
+                        (current, total) -> {
+                            // Emit progress event to JavaScript
+                            JSObject progress = new JSObject();
+                            progress.put("current", current);
+                            progress.put("total", total);
+                            progress.put("percent", (int) ((current * 100.0) / total));
+                            new Handler(Looper.getMainLooper())
+                                    .post(() -> notifyListeners("conversionProgress", progress));
+                        });
+
+                inputFile.delete();
+
+                if (outputPaths != null && outputPaths.length > 0) {
+                    org.json.JSONArray pathsArray = new org.json.JSONArray();
+                    for (String path : outputPaths) {
+                        pathsArray.put(path);
+                    }
+
+                    JSObject result = new JSObject();
+                    result.put("success", true);
+                    result.put("count", outputPaths.length);
+                    result.put("paths", pathsArray);
+
+                    new Handler(Looper.getMainLooper()).post(() -> call.resolve(result));
+                    Log.d(TAG, "LOKPlugin: convertToImageFiles successful - " + outputPaths.length + " files");
+                } else {
+                    throw new Exception("Conversion failed - no output files");
+                }
+
+            } catch (Exception e) {
+                Log.e(TAG, "LOKPlugin: convertToImageFiles error", e);
+                JSObject result = new JSObject();
+                result.put("success", false);
+                result.put("error", e.getMessage());
+                new Handler(Looper.getMainLooper()).post(() -> call.resolve(result));
+            }
+        });
+    }
+
+    /**
+     * Get single image as Base64 from file path
+     */
+    @PluginMethod()
+    public void getImageAsBase64(PluginCall call) {
+        String path = call.getString("path");
+
+        if (path == null || path.isEmpty()) {
+            JSObject result = new JSObject();
+            result.put("success", false);
+            result.put("error", "No path provided");
+            call.resolve(result);
+            return;
+        }
+
+        executor.execute(() -> {
+            try {
+                File imageFile = new File(path);
+                if (!imageFile.exists()) {
+                    throw new Exception("File not found: " + path);
+                }
+
+                byte[] imageBytes = readFileToBytes(imageFile);
+                String base64 = Base64.encodeToString(imageBytes, Base64.NO_WRAP);
+
+                JSObject result = new JSObject();
+                result.put("success", true);
+                result.put("data", base64);
+
+                new Handler(Looper.getMainLooper()).post(() -> call.resolve(result));
+
+            } catch (Exception e) {
+                Log.e(TAG, "LOKPlugin: getImageAsBase64 error", e);
+                JSObject result = new JSObject();
+                result.put("success", false);
+                result.put("error", e.getMessage());
+                new Handler(Looper.getMainLooper()).post(() -> call.resolve(result));
+            }
+        });
+    }
+
+    /**
+     * Delete temporary image files
+     */
+    @PluginMethod()
+    public void deleteImageFiles(PluginCall call) {
+        try {
+            org.json.JSONArray paths = call.getArray("paths");
+            int deleted = 0;
+
+            if (paths != null) {
+                for (int i = 0; i < paths.length(); i++) {
+                    String path = paths.getString(i);
+                    File file = new File(path);
+                    if (file.exists() && file.delete()) {
+                        deleted++;
+                    }
+                }
+            }
+
+            JSObject result = new JSObject();
+            result.put("success", true);
+            result.put("deleted", deleted);
+            call.resolve(result);
+            Log.d(TAG, "LOKPlugin: Deleted " + deleted + " temp files");
+
+        } catch (Exception e) {
+            Log.e(TAG, "LOKPlugin: deleteImageFiles error", e);
+            JSObject result = new JSObject();
+            result.put("success", false);
+            result.put("error", e.getMessage());
+            call.resolve(result);
+        }
     }
 }

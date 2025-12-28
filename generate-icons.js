@@ -32,25 +32,19 @@ const icons = [
     { path: 'android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png', size: 192 },
     { path: 'android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png', size: 192 },
 
-    // Android adaptive icon foregrounds (with padding for safe zone)
-    { path: 'android/app/src/main/res/mipmap-mdpi/ic_launcher_foreground.png', size: 108, iconSize: 72 },
-    { path: 'android/app/src/main/res/mipmap-hdpi/ic_launcher_foreground.png', size: 162, iconSize: 108 },
-    { path: 'android/app/src/main/res/mipmap-xhdpi/ic_launcher_foreground.png', size: 216, iconSize: 144 },
-    { path: 'android/app/src/main/res/mipmap-xxhdpi/ic_launcher_foreground.png', size: 324, iconSize: 216 },
-    { path: 'android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png', size: 432, iconSize: 288 },
-
-    // Splash screen images - larger sizes for better visibility
-    { path: 'android/app/src/main/res/drawable/splash.png', size: 384 },
+    // Splash screen images - sizes matching Android 12+ Splash Screen API (288dp base, no icon background)
+    // Base: 288dp, then multiplied by density (mdpi=1x, hdpi=1.5x, xhdpi=2x, xxhdpi=3x, xxxhdpi=4x)
+    { path: 'android/app/src/main/res/drawable/splash.png', size: 288 },
     { path: 'android/app/src/main/res/drawable-port-mdpi/splash.png', size: 288 },
-    { path: 'android/app/src/main/res/drawable-port-hdpi/splash.png', size: 384 },
-    { path: 'android/app/src/main/res/drawable-port-xhdpi/splash.png', size: 512 },
-    { path: 'android/app/src/main/res/drawable-port-xxhdpi/splash.png', size: 640 },
-    { path: 'android/app/src/main/res/drawable-port-xxxhdpi/splash.png', size: 768 },
+    { path: 'android/app/src/main/res/drawable-port-hdpi/splash.png', size: 432 },
+    { path: 'android/app/src/main/res/drawable-port-xhdpi/splash.png', size: 576 },
+    { path: 'android/app/src/main/res/drawable-port-xxhdpi/splash.png', size: 864 },
+    { path: 'android/app/src/main/res/drawable-port-xxxhdpi/splash.png', size: 1152 },
     { path: 'android/app/src/main/res/drawable-land-mdpi/splash.png', size: 288 },
-    { path: 'android/app/src/main/res/drawable-land-hdpi/splash.png', size: 384 },
-    { path: 'android/app/src/main/res/drawable-land-xhdpi/splash.png', size: 512 },
-    { path: 'android/app/src/main/res/drawable-land-xxhdpi/splash.png', size: 640 },
-    { path: 'android/app/src/main/res/drawable-land-xxxhdpi/splash.png', size: 768 },
+    { path: 'android/app/src/main/res/drawable-land-hdpi/splash.png', size: 432 },
+    { path: 'android/app/src/main/res/drawable-land-xhdpi/splash.png', size: 576 },
+    { path: 'android/app/src/main/res/drawable-land-xxhdpi/splash.png', size: 864 },
+    { path: 'android/app/src/main/res/drawable-land-xxxhdpi/splash.png', size: 1152 },
 ];
 
 async function generateIcon(config, baseImage) {

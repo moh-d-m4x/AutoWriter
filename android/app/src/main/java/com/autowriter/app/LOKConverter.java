@@ -390,6 +390,7 @@ public class LOKConverter {
 
         File tempPdf = null;
         boolean needsCleanup = false;
+        java.util.ArrayList<String> outputFiles = new java.util.ArrayList<>();
 
         try {
             // Check if input is already a PDF
@@ -400,7 +401,12 @@ public class LOKConverter {
                 Log.d(TAG, "Input is already PDF, skipping conversion");
             } else {
                 // Step 1: Convert DOCX to PDF
-                tempPdf = new File(inputPath.replace(".docx", "_temp.pdf").replace(".doc", "_temp.pdf"));
+                tempPdf = new File(inputPath.replace(".docx", "_temp.pdf")
+                        .replace(".doc", "_temp.pdf")
+                        .replace(".pptx", "_temp.pdf")
+                        .replace(".ppt", "_temp.pdf")
+                        .replace(".xlsx", "_temp.pdf")
+                        .replace(".xls", "_temp.pdf"));
                 needsCleanup = true;
                 if (!convertToPdf(inputPath, tempPdf.getAbsolutePath())) {
                     Log.e(TAG, "Failed to convert DOCX to PDF");
@@ -423,7 +429,6 @@ public class LOKConverter {
             }
 
             int dpi = 150;
-            java.util.ArrayList<String> outputFiles = new java.util.ArrayList<>();
 
             // Render each page
             for (int i = 0; i < pageCount; i++) {
@@ -471,6 +476,124 @@ public class LOKConverter {
         } catch (Exception e) {
             Log.e(TAG, "Multi-page image conversion via PDF failed", e);
             // Only delete tempPdf if we created it
+            if (needsCleanup && tempPdf != null)
+                tempPdf.delete();
+            return null;
+        }
+    }
+
+    /**
+     * Progress callback interface for page-by-page conversion
+     */
+    public interface ProgressCallback {
+        void onProgress(int current, int total);
+    }
+
+    /**
+     * Convert document to images with progress callback
+     * Processes pages one at a time to minimize memory usage
+     */
+    public String[] convertToImagesViaPdfWithProgress(String inputPath, String outputDir,
+            String baseName, ProgressCallback callback) {
+        if (!isReady || office == null) {
+            Log.e(TAG, "LibreOfficeKit not ready: " + lastError);
+            return null;
+        }
+
+        File tempPdf = null;
+        boolean needsCleanup = false;
+        java.util.ArrayList<String> outputFiles = new java.util.ArrayList<>();
+
+        try {
+            // Check if input is already a PDF
+            if (inputPath.toLowerCase().endsWith(".pdf")) {
+                tempPdf = new File(inputPath);
+                needsCleanup = false;
+                Log.d(TAG, "Input is already PDF, skipping conversion");
+            } else {
+                // Convert to PDF first
+                tempPdf = new File(inputPath.replace(".docx", "_temp.pdf")
+                        .replace(".doc", "_temp.pdf")
+                        .replace(".pptx", "_temp.pdf")
+                        .replace(".ppt", "_temp.pdf")
+                        .replace(".xlsx", "_temp.pdf")
+                        .replace(".xls", "_temp.pdf"));
+                needsCleanup = true;
+                if (!convertToPdf(inputPath, tempPdf.getAbsolutePath())) {
+                    Log.e(TAG, "Failed to convert document to PDF");
+                    return null;
+                }
+            }
+
+            // Render PDF pages one by one
+            android.os.ParcelFileDescriptor pfd = android.os.ParcelFileDescriptor.open(
+                    tempPdf, android.os.ParcelFileDescriptor.MODE_READ_ONLY);
+            android.graphics.pdf.PdfRenderer renderer = new android.graphics.pdf.PdfRenderer(pfd);
+
+            int pageCount = renderer.getPageCount();
+            Log.d(TAG, "PDF has " + pageCount + " pages, processing with progress...");
+
+            if (pageCount == 0) {
+                renderer.close();
+                pfd.close();
+                return null;
+            }
+
+            int dpi = 150;
+
+            // Process ONE page at a time to minimize memory
+            for (int i = 0; i < pageCount; i++) {
+                android.graphics.pdf.PdfRenderer.Page page = renderer.openPage(i);
+
+                int pixelWidth = (int) (page.getWidth() * dpi / 72.0);
+                int pixelHeight = (int) (page.getHeight() * dpi / 72.0);
+
+                android.graphics.Bitmap bitmap = android.graphics.Bitmap.createBitmap(
+                        pixelWidth, pixelHeight, android.graphics.Bitmap.Config.ARGB_8888);
+                bitmap.eraseColor(android.graphics.Color.WHITE);
+
+                page.render(bitmap, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                page.close();
+
+                // Save immediately
+                String outputPath = outputDir + "/" + baseName + "_page" + (i + 1) + ".png";
+                File outputFile = new File(outputPath);
+                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(outputFile)) {
+                    bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, fos);
+                    fos.flush();
+                }
+
+                // Recycle bitmap immediately to free memory
+                bitmap.recycle();
+                bitmap = null;
+
+                if (outputFile.exists() && outputFile.length() > 0) {
+                    outputFiles.add(outputPath);
+                    Log.d(TAG, "Page " + (i + 1) + "/" + pageCount + " saved");
+                }
+
+                // Report progress
+                if (callback != null) {
+                    callback.onProgress(i + 1, pageCount);
+                }
+            }
+
+            renderer.close();
+            pfd.close();
+
+            // Cleanup temp PDF
+            if (needsCleanup && tempPdf != null) {
+                tempPdf.delete();
+            }
+
+            if (outputFiles.size() > 0) {
+                Log.d(TAG, "Created " + outputFiles.size() + " page images with progress");
+                return outputFiles.toArray(new String[0]);
+            }
+            return null;
+
+        } catch (Exception e) {
+            Log.e(TAG, "Image conversion with progress failed", e);
             if (needsCleanup && tempPdf != null)
                 tempPdf.delete();
             return null;
