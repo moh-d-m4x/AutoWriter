@@ -1121,20 +1121,16 @@ function App() {
                 'sign': fixArabicText(formData.sign),
                 'copy_to': fixArabicText(formData.copy_to),
 
-                'الشركة الأم': fixArabicText(formData.parent_company),
-                'الاول': fixArabicText(formData.parent_company) || ' ', // Ensure textbox not empty
-                'الشركة الفرعية': fixArabicText(formData.subsidiary_company),
-                'الثاني': fixArabicText(formData.subsidiary_company) || ' ', // Ensure textbox not empty
-                'الاخ': fixArabicText(formData.to),
-                'المحترم': fixArabicText(formData.to_the),
-                'السلام عليكم ورحمة الله وبركاته': fixArabicText(formData.greetings),
-                'القائد العام': fixArabicText(formData.from),
-                'الوحدة المحددة': fixArabicText(formData.from),
-                'الثالث': fixArabicText(formData.from) || ' ', // Ensure textbox not empty
-                'الموضوع': fixArabicText(formData.subject_name),
-                'تحية طيبة وبعد': fixArabicText(formData.subject),
-                'وشكرا': fixArabicText(formData.ending),
-                'التوقيع': fixArabicText(formData.sign)
+                'للالأوللل': fixArabicText(formData.parent_company) || ' ', // Ensure textbox not empty
+                'للالثانيلل': fixArabicText(formData.subsidiary_company) || ' ', // Ensure textbox not empty
+                'للالثالثلل': fixArabicText(formData.from) || ' ', // Ensure textbox not empty
+                'للالاخلل': fixArabicText(formData.to),
+                'للالمحترملل': fixArabicText(formData.to_the),
+                'للالسلام عليكم ورحمة الله وبركاتهلل': fixArabicText(formData.greetings),
+                'للالموضوعلل': fixArabicText(formData.subject_name),
+                'للتحية طيبة وبعدلل': fixArabicText(formData.subject),
+                'للوشكرالل': fixArabicText(formData.ending),
+                'للالتوقيعلل': fixArabicText(formData.sign)
             };
 
             const directTextKeys = Object.keys(replacements).filter(k => /[\u0600-\u06FF]/.test(k));
@@ -1168,7 +1164,7 @@ function App() {
 
                         const copyToLines = formData.copy_to.split('\n').filter(line => line.trim());
                         if (copyToLines.length > 0) {
-                            const paragraphPattern = /<w:p\s[^>]*>(?:[^<]|<(?!w:p\s))*?<w:numPr>(?:[^<]|<(?!w:p\s))*?<w:t[^>]*>دائرة<\/w:t><\/w:r><\/w:p>/;
+                            const paragraphPattern = /<w:p\s[^>]*>(?:[^<]|<(?!w:p\s))*?<w:numPr>(?:[^<]|<(?!w:p\s))*?<w:t[^>]*>للدائرلل<\/w:t><\/w:r><\/w:p>/;
                             const match = content.match(paragraphPattern);
                             if (match) {
                                 const originalParagraph = match[0];
@@ -1179,11 +1175,11 @@ function App() {
                                         .replace(/>/g, '&gt;')
                                         .replace(/"/g, '&quot;')
                                         .replace(/'/g, '&apos;');
-                                    return originalParagraph.replace(/>دائرة</, '>' + escapedLine + '<');
+                                    return originalParagraph.replace(/>للدائرلل</, '>' + escapedLine + '<');
                                 }).join('');
                                 content = content.replace(paragraphPattern, listItems);
                             } else {
-                                const simplePattern = /(<w:t[^>]*>)دائرة(<\/w:t>)/g;
+                                const simplePattern = /(<w:t[^>]*>)للدائرلل(<\/w:t>)/g;
                                 const firstLine = copyToLines[0].trim()
                                     .replace(/&/g, '&amp;')
                                     .replace(/</g, '&lt;')
@@ -1194,9 +1190,9 @@ function App() {
                             }
                         } else {
                             // Remove the placeholder when copy_to is empty
-                            const paragraphPattern = /<w:p\s[^>]*>(?:[^<]|<(?!w:p\s))*?<w:numPr>(?:[^<]|<(?!w:p\s))*?<w:t[^>]*>دائرة<\/w:t><\/w:r><\/w:p>/;
+                            const paragraphPattern = /<w:p\s[^>]*>(?:[^<]|<(?!w:p\s))*?<w:numPr>(?:[^<]|<(?!w:p\s))*?<w:t[^>]*>للدائرلل<\/w:t><\/w:r><\/w:p>/;
                             content = content.replace(paragraphPattern, '');
-                            const simplePattern = /(<w:t[^>]*>)دائرة(<\/w:t>)/g;
+                            const simplePattern = /(<w:t[^>]*>)للدائرلل(<\/w:t>)/g;
                             content = content.replace(simplePattern, '$1$2');
                         }
 
@@ -1212,6 +1208,10 @@ function App() {
 
                         content = content.replace(/<w:t[^>]*>«<\/w:t>/g, '<w:t></w:t>');
                         content = content.replace(/<w:t[^>]*>»<\/w:t>/g, '<w:t></w:t>');
+
+                        // Remove [[ and ]] brackets from separate XML runs (Word splits them from placeholder text)
+                        content = content.replace(/<w:t[^>]*>\[\[<\/w:t>/g, '<w:t></w:t>');
+                        content = content.replace(/<w:t[^>]*>\]\]<\/w:t>/g, '<w:t></w:t>');
 
                         zip.file(xmlFile, content);
                     }
@@ -2126,13 +2126,13 @@ function App() {
                 'to_the': fixArabicText(formData.to_the), 'greetings': fixArabicText(formData.greetings),
                 'subject_name': fixArabicText(formData.subject_name), 'subject': fixArabicText(formData.subject),
                 'ending': fixArabicText(formData.ending), 'sign': fixArabicText(formData.sign), 'copy_to': fixArabicText(formData.copy_to),
-                'الشركة الأم': fixArabicText(formData.parent_company), 'الاول': fixArabicText(formData.parent_company) || ' ',
-                'الشركة الفرعية': fixArabicText(formData.subsidiary_company), 'الثاني': fixArabicText(formData.subsidiary_company) || ' ',
-                'الاخ': fixArabicText(formData.to), 'المحترم': fixArabicText(formData.to_the),
-                'السلام عليكم ورحمة الله وبركاته': fixArabicText(formData.greetings),
-                'القائد العام': fixArabicText(formData.from), 'الوحدة المحددة': fixArabicText(formData.from),
-                'الثالث': fixArabicText(formData.from) || ' ', 'الموضوع': fixArabicText(formData.subject_name),
-                'تحية طيبة وبعد': fixArabicText(formData.subject), 'وشكرا': fixArabicText(formData.ending), 'التوقيع': fixArabicText(formData.sign)
+                'للالأوللل': fixArabicText(formData.parent_company) || ' ',
+                'للالثانيلل': fixArabicText(formData.subsidiary_company) || ' ',
+                'للالثالثلل': fixArabicText(formData.from) || ' ',
+                'للالاخلل': fixArabicText(formData.to), 'للالمحترملل': fixArabicText(formData.to_the),
+                'للالسلام عليكم ورحمة الله وبركاتهلل': fixArabicText(formData.greetings),
+                'للالموضوعلل': fixArabicText(formData.subject_name),
+                'للتحية طيبة وبعدلل': fixArabicText(formData.subject), 'للوشكرالل': fixArabicText(formData.ending), 'للالتوقيعلل': fixArabicText(formData.sign)
             };
 
             const directTextKeys = Object.keys(replacements).filter(k => /[\u0600-\u06FF]/.test(k));
@@ -2157,7 +2157,7 @@ function App() {
                         // Handle copy_to (نسخة الى) field - same as exportDocument
                         const copyToLines = formData.copy_to.split('\n').filter(line => line.trim());
                         if (copyToLines.length > 0) {
-                            const paragraphPattern = /<w:p\s[^>]*>(?:[^<]|<(?!w:p\s))*?<w:numPr>(?:[^<]|<(?!w:p\s))*?<w:t[^>]*>دائرة<\/w:t><\/w:r><\/w:p>/;
+                            const paragraphPattern = /<w:p\s[^>]*>(?:[^<]|<(?!w:p\s))*?<w:numPr>(?:[^<]|<(?!w:p\s))*?<w:t[^>]*>للدائرلل<\/w:t><\/w:r><\/w:p>/;
                             const match = content.match(paragraphPattern);
                             if (match) {
                                 const originalParagraph = match[0];
@@ -2168,11 +2168,11 @@ function App() {
                                         .replace(/>/g, '&gt;')
                                         .replace(/"/g, '&quot;')
                                         .replace(/'/g, '&apos;');
-                                    return originalParagraph.replace(/>دائرة</, '>' + escapedLine + '<');
+                                    return originalParagraph.replace(/>للدائرلل</, '>' + escapedLine + '<');
                                 }).join('');
                                 content = content.replace(paragraphPattern, listItems);
                             } else {
-                                const simplePattern = /(<w:t[^>]*>)دائرة(<\/w:t>)/g;
+                                const simplePattern = /(<w:t[^>]*>)للدائرلل(<\/w:t>)/g;
                                 const firstLine = copyToLines[0].trim()
                                     .replace(/&/g, '&amp;')
                                     .replace(/</g, '&lt;')
@@ -2183,9 +2183,9 @@ function App() {
                             }
                         } else {
                             // Remove the placeholder when copy_to is empty
-                            const paragraphPattern = /<w:p\s[^>]*>(?:[^<]|<(?!w:p\s))*?<w:numPr>(?:[^<]|<(?!w:p\s))*?<w:t[^>]*>دائرة<\/w:t><\/w:r><\/w:p>/;
+                            const paragraphPattern = /<w:p\s[^>]*>(?:[^<]|<(?!w:p\s))*?<w:numPr>(?:[^<]|<(?!w:p\s))*?<w:t[^>]*>للدائرلل<\/w:t><\/w:r><\/w:p>/;
                             content = content.replace(paragraphPattern, '');
-                            const simplePattern = /(<w:t[^>]*>)دائرة(<\/w:t>)/g;
+                            const simplePattern = /(<w:t[^>]*>)للدائرلل(<\/w:t>)/g;
                             content = content.replace(simplePattern, '$1$2');
                         }
 
@@ -2198,6 +2198,9 @@ function App() {
                             return `${openTag}${newText}${closeTag}`;
                         });
                         content = content.replace(/<w:t[^>]*>«<\/w:t>/g, '<w:t></w:t>').replace(/<w:t[^>]*>»<\/w:t>/g, '<w:t></w:t>');
+                        // Remove [[ and ]] brackets from separate XML runs (Word splits them from placeholder text)
+                        content = content.replace(/<w:t[^>]*>\[\[<\/w:t>/g, '<w:t></w:t>');
+                        content = content.replace(/<w:t[^>]*>\]\]<\/w:t>/g, '<w:t></w:t>');
                         zip.file(xmlFile, content);
                     }
                 } catch (e) { console.log(`Skipping ${xmlFile}:`, e.message); }
