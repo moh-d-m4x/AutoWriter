@@ -38,6 +38,27 @@ public class LOKConverter {
     private String lastError = null;
 
     /**
+     * Calculate dynamic page limit based on available memory
+     * Each page takes approximately 3-5MB of memory when rendered
+     */
+    private int calculateMaxPages() {
+        Runtime runtime = Runtime.getRuntime();
+        long maxMem = runtime.maxMemory(); // Max heap size
+        long usedMem = runtime.totalMemory() - runtime.freeMemory();
+        long availableMem = maxMem - usedMem;
+
+        // Estimate ~4MB per page for rendering + base64 encoding
+        // Use only 50% of available memory to leave room for other operations
+        long safeMemory = (availableMem / 2) / (4 * 1024 * 1024);
+
+        // Minimum 10 pages, maximum 150 pages
+        int maxPages = Math.max(10, Math.min(150, (int) safeMemory));
+
+        Log.d(TAG, "Dynamic page limit: " + maxPages + " pages (available: " + (availableMem / 1024 / 1024) + "MB)");
+        return maxPages;
+    }
+
+    /**
      * Constructor - initializes LibreOfficeKit
      */
     public LOKConverter(Context context) {
@@ -254,7 +275,7 @@ public class LOKConverter {
      * @param combinePages If true, combine all pages into one image
      * @return true if conversion successful
      */
-    public boolean convertToImageViaPdf(String inputPath, String outputPath, boolean combinePages) {
+    public boolean convertToImageViaPdf(String inputPath, String outputPath, boolean combinePages) throws Exception {
         if (!isReady || office == null) {
             Log.e(TAG, "LibreOfficeKit not ready: " + lastError);
             return false;
@@ -288,13 +309,39 @@ public class LOKConverter {
             int pageCount = renderer.getPageCount();
             Log.d(TAG, "PDF has " + pageCount + " pages");
 
+            // Dynamic page limit based on available memory
+            final int maxPages = calculateMaxPages();
+            if (pageCount > maxPages) {
+                renderer.close();
+                pfd.close();
+                Log.e(TAG, "PDF has too many pages: " + pageCount + " (max: " + maxPages + ")");
+                throw new Exception(
+                        "الملف كبير جداً (" + pageCount + " صفحة). الحد الأقصى " + maxPages + " صفحة للذاكرة المتاحة");
+            }
+
             if (pageCount == 0) {
                 renderer.close();
                 pfd.close();
                 return false;
             }
 
+            // Calculate DPI based on page count to avoid bitmap size limits
+            // Android has max bitmap height around 30,000 pixels and max size ~100MP
             int dpi = 150;
+            if (combinePages && pageCount > 20) {
+                // For 20+ pages, reduce DPI to stay under limits
+                // Estimate: A4 page at 150dpi = ~1750px height
+                // Max 30000px / estimated_page_height = max pages at that DPI
+                if (pageCount > 50) {
+                    dpi = 72; // Very low DPI for 50+ pages
+                } else if (pageCount > 30) {
+                    dpi = 100; // Low DPI for 30-50 pages
+                } else {
+                    dpi = 120; // Medium DPI for 20-30 pages
+                }
+                Log.d(TAG, "Reducing DPI to " + dpi + " for " + pageCount + " pages to avoid bitmap limits");
+            }
+
             java.util.ArrayList<android.graphics.Bitmap> pageBitmaps = new java.util.ArrayList<>();
             int totalHeight = 0;
             int maxWidth = 0;
@@ -370,7 +417,7 @@ public class LOKConverter {
             // Only delete tempPdf if we created it
             if (needsCleanup && tempPdf != null)
                 tempPdf.delete();
-            return false;
+            throw e; // Re-throw to preserve error message
         }
     }
 
@@ -382,7 +429,7 @@ public class LOKConverter {
      * @param baseName  Base name for output files
      * @return Array of created file paths, or null if failed
      */
-    public String[] convertToImagesViaPdf(String inputPath, String outputDir, String baseName) {
+    public String[] convertToImagesViaPdf(String inputPath, String outputDir, String baseName) throws Exception {
         if (!isReady || office == null) {
             Log.e(TAG, "LibreOfficeKit not ready: " + lastError);
             return null;
@@ -421,6 +468,16 @@ public class LOKConverter {
 
             int pageCount = renderer.getPageCount();
             Log.d(TAG, "PDF has " + pageCount + " pages");
+
+            // Dynamic page limit based on available memory
+            final int maxPages = calculateMaxPages();
+            if (pageCount > maxPages) {
+                renderer.close();
+                pfd.close();
+                Log.e(TAG, "PDF has too many pages: " + pageCount + " (max: " + maxPages + ")");
+                throw new Exception(
+                        "الملف كبير جداً (" + pageCount + " صفحة). الحد الأقصى " + maxPages + " صفحة للذاكرة المتاحة");
+            }
 
             if (pageCount == 0) {
                 renderer.close();
@@ -478,7 +535,7 @@ public class LOKConverter {
             // Only delete tempPdf if we created it
             if (needsCleanup && tempPdf != null)
                 tempPdf.delete();
-            return null;
+            throw e; // Re-throw to preserve error message
         }
     }
 
@@ -494,7 +551,7 @@ public class LOKConverter {
      * Processes pages one at a time to minimize memory usage
      */
     public String[] convertToImagesViaPdfWithProgress(String inputPath, String outputDir,
-            String baseName, ProgressCallback callback) {
+            String baseName, ProgressCallback callback) throws Exception {
         if (!isReady || office == null) {
             Log.e(TAG, "LibreOfficeKit not ready: " + lastError);
             return null;
@@ -532,6 +589,9 @@ public class LOKConverter {
 
             int pageCount = renderer.getPageCount();
             Log.d(TAG, "PDF has " + pageCount + " pages, processing with progress...");
+
+            // NOTE: No page limit here - this function processes pages ONE at a time
+            // and recycles memory after each page, so it can handle any number of pages
 
             if (pageCount == 0) {
                 renderer.close();
@@ -596,7 +656,7 @@ public class LOKConverter {
             Log.e(TAG, "Image conversion with progress failed", e);
             if (needsCleanup && tempPdf != null)
                 tempPdf.delete();
-            return null;
+            throw e; // Re-throw to preserve error message
         }
     }
 }

@@ -383,21 +383,37 @@ public class LOKPlugin extends Plugin {
                                 continue;
                             }
 
-                            byte[] imageBytes = readFileToBytes(imageFile);
-                            String imageBase64 = Base64.encodeToString(imageBytes, Base64.NO_WRAP);
+                            // Document extensions that should use file-path based processing
+                            java.util.Set<String> documentExtensions = new java.util.HashSet<>(java.util.Arrays.asList(
+                                    ".pdf", ".docx", ".doc", ".pptx", ".ppt", ".xlsx", ".xls"));
 
-                            // Legacy support
-                            imagesArray.put(imageBase64);
+                            boolean isDocument = documentExtensions.contains(extension);
 
-                            // New generic file support
                             JSObject fileObj = new JSObject();
-                            fileObj.put("data", imageBase64);
                             fileObj.put("name", imageFile.getName());
-                            filesArray.put(fileObj);
 
-                            if (imageFile.exists()) {
+                            if (isDocument) {
+                                // For documents: return file PATH to avoid loading large files into memory
+                                // JavaScript will process these using convertToImageFiles (streaming)
+                                fileObj.put("path", path);
+                                fileObj.put("isDocument", true);
+                                Log.d(TAG, "Document file - returning path: " + fileName);
+                            } else {
+                                // For images: load as Base64 (usually small)
+                                byte[] imageBytes = readFileToBytes(imageFile);
+                                String imageBase64 = Base64.encodeToString(imageBytes, Base64.NO_WRAP);
+
+                                // Legacy support
+                                imagesArray.put(imageBase64);
+
+                                fileObj.put("data", imageBase64);
+                                fileObj.put("isDocument", false);
+
+                                // Delete image file after loading (not needed anymore)
                                 imageFile.delete();
                             }
+
+                            filesArray.put(fileObj);
                         }
                     }
 
@@ -547,6 +563,88 @@ public class LOKPlugin extends Plugin {
 
             } catch (Exception e) {
                 Log.e(TAG, "LOKPlugin: convertToImageFiles error", e);
+                JSObject result = new JSObject();
+                result.put("success", false);
+                result.put("error", e.getMessage());
+                new Handler(Looper.getMainLooper()).post(() -> call.resolve(result));
+            }
+        });
+    }
+
+    /**
+     * Convert document to image FILES directly from file path (no Base64)
+     * Enables streaming processing for large PDFs without loading to JS memory
+     */
+    @PluginMethod()
+    public void convertDocumentFromPath(PluginCall call) {
+        Log.d(TAG, "LOKPlugin: convertDocumentFromPath called");
+
+        String inputPath = call.getString("inputPath");
+        String baseName = call.getString("baseName", "page");
+
+        if (inputPath == null || inputPath.isEmpty()) {
+            JSObject result = new JSObject();
+            result.put("success", false);
+            result.put("error", "No input path provided");
+            call.resolve(result);
+            return;
+        }
+
+        executor.execute(() -> {
+            try {
+                ensureInitialized();
+
+                if (converter == null || !converter.isReady()) {
+                    throw new Exception("LibreOfficeKit not initialized");
+                }
+
+                File inputFile = new File(inputPath);
+                if (!inputFile.exists()) {
+                    throw new Exception("Input file not found: " + inputPath);
+                }
+
+                Log.d(TAG,
+                        "Processing document from path: " + inputPath + " (size: " + inputFile.length() / 1024 + "KB)");
+
+                File cacheDir = getContext().getCacheDir();
+
+                // Use streaming converter with progress callback
+                String[] outputPaths = converter.convertToImagesViaPdfWithProgress(
+                        inputFile.getAbsolutePath(),
+                        cacheDir.getAbsolutePath(),
+                        baseName,
+                        (current, total) -> {
+                            // Emit progress event to JavaScript
+                            JSObject progress = new JSObject();
+                            progress.put("current", current);
+                            progress.put("total", total);
+                            progress.put("percent", (int) ((current * 100.0) / total));
+                            new Handler(Looper.getMainLooper())
+                                    .post(() -> notifyListeners("conversionProgress", progress));
+                        });
+
+                // Delete the original input file after conversion
+                inputFile.delete();
+
+                if (outputPaths != null && outputPaths.length > 0) {
+                    org.json.JSONArray pathsArray = new org.json.JSONArray();
+                    for (String path : outputPaths) {
+                        pathsArray.put(path);
+                    }
+
+                    JSObject result = new JSObject();
+                    result.put("success", true);
+                    result.put("count", outputPaths.length);
+                    result.put("paths", pathsArray);
+
+                    new Handler(Looper.getMainLooper()).post(() -> call.resolve(result));
+                    Log.d(TAG, "LOKPlugin: convertDocumentFromPath successful - " + outputPaths.length + " files");
+                } else {
+                    throw new Exception("Conversion failed - no output files");
+                }
+
+            } catch (Exception e) {
+                Log.e(TAG, "LOKPlugin: convertDocumentFromPath error", e);
                 JSObject result = new JSObject();
                 result.put("success", false);
                 result.put("error", e.getMessage());

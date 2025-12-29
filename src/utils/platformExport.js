@@ -245,7 +245,7 @@ export const convertToImage = async (docxBuffer, combinePages = true, subjectNam
             }
         } catch (error) {
             console.error('LOKPlugin convertToImage error:', error);
-            return { success: false, error: error.message };
+            return { success: false, error: error.message || error.toString() || 'Unknown conversion error' };
         }
     }
 
@@ -382,7 +382,54 @@ export const convertToImageFiles = async (docxBuffer, subjectName = '', onProgre
             return { success: false, error: result.error || 'Conversion failed' };
         }
     } catch (error) {
-        console.error('convertToImageFiles error:', error);
+        console.error('convertDocumentFromPath error:', error);
+        return { success: false, error: error.message };
+    }
+};
+
+/**
+ * Convert document to images directly from file path (streaming, no memory loading)
+ * This is the preferred method for large files like multi-hundred page PDFs
+ * @param {string} inputPath - Path to the document file
+ * @param {string} baseName - Base name for output files
+ * @param {function} onProgress - Callback(current, total, percent)
+ * @returns {Promise<{success: boolean, paths?: string[], count?: number, error?: string}>}
+ */
+export const convertDocumentFromPath = async (inputPath, baseName = 'page', onProgress = null) => {
+    if (!isAndroid()) {
+        return { success: false, error: 'Only supported on Android' };
+    }
+
+    try {
+        // Register progress listener if callback provided
+        let progressListener = null;
+        if (onProgress) {
+            progressListener = await LOKPlugin.addListener('conversionProgress', (data) => {
+                onProgress(data.current, data.total, data.percent);
+            });
+        }
+
+        const result = await LOKPlugin.convertDocumentFromPath({
+            inputPath: inputPath,
+            baseName: baseName
+        });
+
+        // Remove listener
+        if (progressListener) {
+            progressListener.remove();
+        }
+
+        if (result.success && result.paths) {
+            return {
+                success: true,
+                paths: Array.isArray(result.paths) ? result.paths : [],
+                count: result.count
+            };
+        } else {
+            return { success: false, error: result.error || 'Conversion failed' };
+        }
+    } catch (error) {
+        console.error('convertDocumentFromPath error:', error);
         return { success: false, error: error.message };
     }
 };

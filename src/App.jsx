@@ -303,9 +303,21 @@ function App() {
             isProcessingSharedRef.current = true;
 
             try {
+                // Show loading immediately while fetching shared file
+                setIsExporting(true);
+                setExportFormat('docx-conversion');
+                setExportProgress(0);
+
                 const sharedItems = await checkForSharedImage();
 
-                if (sharedItems && sharedItems.length > 0) {
+                // Early exit if no shared items
+                if (!sharedItems || sharedItems.length === 0) {
+                    setIsExporting(false);
+                    isProcessingSharedRef.current = false;
+                    return;
+                }
+
+                if (sharedItems.length > 0) {
                     const finalImages = [];
                     let hasConverted = false;
                     let skippedCount = 0;
@@ -329,7 +341,7 @@ function App() {
                             finalImages.push(`data:image/png;base64,${item}`);
                         }
                         // New object format
-                        else if (item.data && item.name) {
+                        else if (item.name) {
                             const name = item.name.toLowerCase();
                             const isDoc = supportedDocs.some(ext => name.endsWith(ext));
                             const isImage = supportedImages.some(ext => name.endsWith(ext));
@@ -340,8 +352,43 @@ function App() {
                                 continue;
                             }
 
-                            // Handle Word Documents, PowerPoint, Excel, and PDF
-                            if (isDoc) {
+                            // Handle documents (PDF, Word, PowerPoint, Excel)
+                            // Streaming approach: native processes file directly from path
+                            if (item.isDocument && item.path) {
+                                currentDoc++;
+                                hasConverted = true;
+                                setIsExporting(true);
+                                setExportFormat('docx-conversion');
+                                setExportProgress(0);
+                                setFileProgress({ current: currentDoc, total: totalDocs });
+
+                                // Import the streaming converter
+                                const { convertDocumentFromPath } = await import('./utils/platformExport');
+
+                                // Convert directly from file path - NO memory loading!
+                                const result = await convertDocumentFromPath(item.path, item.name, (current, total, percent) => {
+                                    setExportProgress(percent);
+                                });
+
+                                if (result.success && result.paths && result.paths.length > 0) {
+                                    tempImagePathsRef.current = [...tempImagePathsRef.current, ...result.paths];
+
+                                    // Load images one by one from file paths
+                                    for (const path of result.paths) {
+                                        const base64 = await getImageBase64ByPath(path);
+                                        if (base64) {
+                                            finalImages.push(`data:image/png;base64,${base64}`);
+                                        }
+                                    }
+                                } else {
+                                    showToast(result.error || 'فشل تحويل الملف', 'error');
+                                }
+                                setIsExporting(false);
+                                setExportProgress(0);
+                                setFileProgress({ current: 0, total: 0 });
+                            }
+                            // Legacy approach: item.data contains Base64 (for backwards compatibility)
+                            else if (isDoc && item.data) {
                                 currentDoc++;
                                 hasConverted = true;
                                 setIsExporting(true);
@@ -378,7 +425,7 @@ function App() {
                                 setIsExporting(false);
                                 setExportProgress(0);
                                 setFileProgress({ current: 0, total: 0 });
-                            } else if (isImage) {
+                            } else if (isImage && item.data) {
                                 // Supported Image
                                 let mime = 'image/png';
                                 if (name.endsWith('.jpg') || name.endsWith('.jpeg')) mime = 'image/jpeg';
@@ -421,6 +468,9 @@ function App() {
                 showToast('خطأ في استلام الملف', 'error');
             } finally {
                 isProcessingSharedRef.current = false;
+                setIsExporting(false);
+                setExportProgress(0);
+                setFileProgress({ current: 0, total: 0 });
             }
         };
 
@@ -1102,6 +1152,7 @@ function App() {
             // Set loading state for all export formats
             setIsExporting(true);
             setExportFormat(format); // Track which format is being exported
+            setExportProgress(10); // Initial progress
             exportCancelledRef.current = false; // Reset cancellation flag
 
             // Generate Word document first (for all formats)
@@ -1113,6 +1164,7 @@ function App() {
                 const response = await fetch('/template.docx');
                 templateBuffer = await response.arrayBuffer();
             }
+            setExportProgress(30); // Template loaded
 
             // Check if cancelled after loading template
             if (exportCancelledRef.current) {
@@ -1424,10 +1476,18 @@ function App() {
                             if (match) maxImageNum = Math.max(maxImageNum, parseInt(match[1]));
                         });
 
-                        // Process each added image
+                        // Process each added image (with compression to reduce memory)
                         const imageInserts = [];
                         for (let i = 0; i < addedImages.length; i++) {
-                            const imgDataUrl = addedImages[i];
+                            let imgDataUrl = addedImages[i];
+
+                            // Compress image to reduce memory usage (especially for many images)
+                            try {
+                                imgDataUrl = await compressImage(imgDataUrl, 0.75);
+                            } catch (e) {
+                                // Use original if compression fails
+                            }
+
                             const base64Data = imgDataUrl.split(',')[1];
                             const mimeMatch = imgDataUrl.match(/data:([^;]+);/);
                             const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
@@ -1437,11 +1497,14 @@ function App() {
                             const imageNum = maxImageNum + i + 1;
                             const imagePath = `word/media/addedImage${imageNum}.${ext}`;
                             const binaryString = atob(base64Data);
-                            const bytes = new Uint8Array(binaryString.length);
+                            let bytes = new Uint8Array(binaryString.length);
                             for (let j = 0; j < binaryString.length; j++) {
                                 bytes[j] = binaryString.charCodeAt(j);
                             }
                             zip.file(imagePath, bytes);
+
+                            // Free memory immediately after adding to zip
+                            bytes = null;
 
                             // Add relationship
                             const rId = maxRId + i + 1;
@@ -1477,6 +1540,11 @@ function App() {
                             }
 
                             imageInserts.push({ rId, relEntry, imgWidth, imgHeight, imageNum });
+
+                            // Update progress for many images
+                            if (addedImages.length > 5) {
+                                setExportProgress(Math.floor((i + 1) / addedImages.length * 50)); // 0-50% for image processing
+                            }
                         }
 
                         // Add all relationships
@@ -1542,12 +1610,14 @@ function App() {
             });
 
             const docxBuffer = Array.from(new Uint8Array(output));
+            setExportProgress(50); // Document generated
 
             // Check if cancelled before proceeding with save/conversion
             if (exportCancelledRef.current) {
                 throw new Error('Export cancelled');
             }
 
+            setExportProgress(70); // Starting format-specific export
             // Handle different export formats
             if (format === 'docx') {
                 // Save as Word document
@@ -1608,30 +1678,38 @@ function App() {
                                 if (!isFirst) mergedPdf.addPage();
 
                                 let finalImgData = imgData;
-                                let imgFormat = 'PNG';
+                                let imgFormat = 'JPEG';
 
                                 try {
                                     finalImgData = await compressImage(imgData, 0.8);
-                                    imgFormat = 'JPEG';
-                                } catch (e) { /* Use original */ }
-
-                                const imgProps = mergedPdf.getImageProperties(finalImgData);
-                                const imgRatio = imgProps.width / imgProps.height;
-                                const pageRatio = pdfWidth / pdfHeight;
-
-                                let w, h;
-                                if (imgRatio > pageRatio) {
-                                    w = pdfWidth;
-                                    h = w / imgRatio;
-                                } else {
-                                    h = pdfHeight;
-                                    w = h * imgRatio;
+                                } catch (e) {
+                                    // Detect format from original
+                                    if (imgData.includes('data:image/png')) imgFormat = 'PNG';
+                                    else if (imgData.includes('data:image/webp')) imgFormat = 'WEBP';
+                                    finalImgData = imgData;
                                 }
 
-                                const x = (pdfWidth - w) / 2;
-                                const y = (pdfHeight - h) / 2;
+                                try {
+                                    const imgProps = mergedPdf.getImageProperties(finalImgData);
+                                    const imgRatio = imgProps.width / imgProps.height;
+                                    const pageRatio = pdfWidth / pdfHeight;
 
-                                mergedPdf.addImage(finalImgData, imgFormat, x, y, w, h);
+                                    let w, h;
+                                    if (imgRatio > pageRatio) {
+                                        w = pdfWidth;
+                                        h = w / imgRatio;
+                                    } else {
+                                        h = pdfHeight;
+                                        w = h * imgRatio;
+                                    }
+
+                                    const x = (pdfWidth - w) / 2;
+                                    const y = (pdfHeight - h) / 2;
+
+                                    mergedPdf.addImage(finalImgData, imgFormat, x, y, w, h);
+                                } catch (imgError) {
+                                    console.error('Failed to add image to PDF:', imgError);
+                                }
                             };
 
                             // Add document pages
@@ -1708,30 +1786,38 @@ function App() {
                                 if (!isFirst) mergedPdf.addPage();
 
                                 let finalImgData = imgData;
-                                let imgFormat = 'PNG';
+                                let imgFormat = 'JPEG';
 
                                 try {
                                     finalImgData = await compressImage(imgData, 0.8);
-                                    imgFormat = 'JPEG';
-                                } catch (e) { /* Use original */ }
-
-                                const imgProps = mergedPdf.getImageProperties(finalImgData);
-                                const imgRatio = imgProps.width / imgProps.height;
-                                const pageRatio = pdfWidth / pdfHeight;
-
-                                let w, h;
-                                if (imgRatio > pageRatio) {
-                                    w = pdfWidth;
-                                    h = w / imgRatio;
-                                } else {
-                                    h = pdfHeight;
-                                    w = h * imgRatio;
+                                } catch (e) {
+                                    // Detect format from original
+                                    if (imgData.includes('data:image/png')) imgFormat = 'PNG';
+                                    else if (imgData.includes('data:image/webp')) imgFormat = 'WEBP';
+                                    finalImgData = imgData;
                                 }
 
-                                const x = (pdfWidth - w) / 2;
-                                const y = (pdfHeight - h) / 2;
+                                try {
+                                    const imgProps = mergedPdf.getImageProperties(finalImgData);
+                                    const imgRatio = imgProps.width / imgProps.height;
+                                    const pageRatio = pdfWidth / pdfHeight;
 
-                                mergedPdf.addImage(finalImgData, imgFormat, x, y, w, h);
+                                    let w, h;
+                                    if (imgRatio > pageRatio) {
+                                        w = pdfWidth;
+                                        h = w / imgRatio;
+                                    } else {
+                                        h = pdfHeight;
+                                        w = h * imgRatio;
+                                    }
+
+                                    const x = (pdfWidth - w) / 2;
+                                    const y = (pdfHeight - h) / 2;
+
+                                    mergedPdf.addImage(finalImgData, imgFormat, x, y, w, h);
+                                } catch (imgError) {
+                                    console.error('Failed to add image to PDF:', imgError);
+                                }
                             };
 
                             // Add document pages
@@ -1775,8 +1861,10 @@ function App() {
                             if (exportCancelledRef.current) {
                                 throw new Error('Export cancelled');
                             }
+                            setExportProgress(85); // Conversion complete
 
                             const filename = `${sanitizeFileName(formData.subject_name)}.pdf`;
+                            setExportProgress(95); // Starting save
                             const saveResult = await saveFileAndroid(conversionResult.buffer, filename, 'application/pdf');
                             if (saveResult.success) {
                                 if (!saveResult.cancelled) {
@@ -1803,6 +1891,8 @@ function App() {
                         if (exportCancelledRef.current) {
                             throw new Error('Export cancelled');
                         }
+                        setExportProgress(85); // Conversion complete
+
                         if (combineImagePages) {
                             let finalBuffer = conversionResult.buffer;
 
@@ -1865,6 +1955,7 @@ function App() {
 
                             // Single merged image
                             const filename = `${sanitizeFileName(formData.subject_name)}.png`;
+                            setExportProgress(95); // Starting save
                             const saveResult = await saveFileAndroid(finalBuffer, filename, 'image/png');
                             if (saveResult.success) {
                                 if (!saveResult.cancelled) {
@@ -2031,12 +2122,13 @@ function App() {
             console.error('Export error:', error);
             // Don't show error for cancelled operations
             if (!error.message?.includes('cancelled')) {
-                alert('حدث خطأ أثناء التصدير: ' + error.message);
+                const errorMsg = error.message || error.toString() || 'خطأ غير معروف';
+                alert('حدث خطأ أثناء التصدير: ' + errorMsg);
             }
         } finally {
-            // Always reset loading state and clear added images
+            // Reset loading state (keep addedImages for potential re-export)
             setIsExporting(false);
-            setAddedImages([]); // Clear added images after export
+            setExportProgress(0); // Reset progress
         }
     };
 
@@ -2048,6 +2140,7 @@ function App() {
 
         setIsExporting(true);
         setExportFormat('pdf'); // Enable cancel button
+        setExportProgress(10); // Initial progress
         exportCancelledRef.current = false;
         try {
             const doc = new jsPDF({
@@ -2058,47 +2151,65 @@ function App() {
 
             const pdfWidth = doc.internal.pageSize.getWidth();
             const pdfHeight = doc.internal.pageSize.getHeight();
+            const totalImages = previewState.images.length;
 
             for (let i = 0; i < previewState.images.length; i++) {
                 // Check cancellation
                 if (exportCancelledRef.current) throw new Error('CANCELLED');
+
+                // Update progress based on image index (10-90%)
+                setExportProgress(10 + Math.round((i / totalImages) * 80));
+
                 if (i > 0) doc.addPage();
 
                 const imgData = previewState.images[i];
 
                 // Compress image to reduce file size
                 let finalImgData = imgData;
-                let format = 'PNG';
+                let format = 'JPEG';
 
                 try {
                     // Always compress to JPEG 0.8 to reduce size
                     finalImgData = await compressImage(imgData, 0.8);
-                    format = 'JPEG';
                 } catch (e) {
                     console.error('Image compression failed, using original', e);
+                    // Detect format from original data URL
+                    if (imgData.includes('data:image/png')) {
+                        format = 'PNG';
+                    } else if (imgData.includes('data:image/webp')) {
+                        format = 'WEBP';
+                    } else if (imgData.includes('data:image/gif')) {
+                        format = 'GIF';
+                    }
+                    finalImgData = imgData;
                 }
 
-                // Get image dimensions to fit to page
-                const imgProps = doc.getImageProperties(finalImgData);
+                try {
+                    // Get image dimensions to fit to page
+                    const imgProps = doc.getImageProperties(finalImgData);
 
-                // Calculate aspect ratio
-                const imgRatio = imgProps.width / imgProps.height;
-                const pdfRatio = pdfWidth / pdfHeight;
+                    // Calculate aspect ratio
+                    const imgRatio = imgProps.width / imgProps.height;
+                    const pdfRatio = pdfWidth / pdfHeight;
 
-                let w, h;
-                if (imgRatio > pdfRatio) {
-                    w = pdfWidth;
-                    h = w / imgRatio;
-                } else {
-                    h = pdfHeight;
-                    w = h * imgRatio;
+                    let w, h;
+                    if (imgRatio > pdfRatio) {
+                        w = pdfWidth;
+                        h = w / imgRatio;
+                    } else {
+                        h = pdfHeight;
+                        w = h * imgRatio;
+                    }
+
+                    // Center image
+                    const x = (pdfWidth - w) / 2;
+                    const y = (pdfHeight - h) / 2;
+
+                    doc.addImage(finalImgData, format, x, y, w, h);
+                } catch (imgError) {
+                    console.error('Failed to add image to PDF:', imgError);
+                    // Skip this image but continue with others
                 }
-
-                // Center image
-                const x = (pdfWidth - w) / 2;
-                const y = (pdfHeight - h) / 2;
-
-                doc.addImage(finalImgData, format, x, y, w, h);
 
                 // Yield to allow UI update
                 await new Promise(resolve => setTimeout(resolve, 0));
@@ -2164,6 +2275,7 @@ function App() {
             }
         } finally {
             setIsExporting(false);
+            setExportProgress(0); // Reset progress
         }
     };
 
@@ -2832,7 +2944,7 @@ function App() {
                                 <div className="preview-export-bar">
                                     <button
                                         className="preview-export-btn docx"
-                                        onClick={() => { closePreview(); setExportFormat('docx'); exportDocument('docx'); }}
+                                        onClick={() => { setExportFormat('docx'); exportDocument('docx'); }}
                                         disabled={isExporting}
                                     >
                                         <span className="icon">📄</span>
@@ -2840,7 +2952,7 @@ function App() {
                                     </button>
                                     <button
                                         className="preview-export-btn pdf"
-                                        onClick={() => { closePreview(); setExportFormat('pdf'); exportDocument('pdf'); }}
+                                        onClick={() => { setExportFormat('pdf'); exportDocument('pdf'); }}
                                         disabled={isExporting}
                                     >
                                         <span className="icon">📕</span>
@@ -2848,7 +2960,7 @@ function App() {
                                     </button>
                                     <button
                                         className="preview-export-btn image"
-                                        onClick={() => { closePreview(); setExportFormat('png'); exportDocument('png'); }}
+                                        onClick={() => { setExportFormat('png'); exportDocument('png'); }}
                                         disabled={isExporting}
                                     >
                                         <span className="icon">🖼️</span>

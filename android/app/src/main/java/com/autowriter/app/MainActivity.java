@@ -127,6 +127,8 @@ public class MainActivity extends BridgeActivity {
                 return; // Skip without loading to prevent OOM
             }
 
+            // Large files (like big PDFs) will be processed page-by-page using file paths
+            // to avoid loading everything into memory at once
             java.io.InputStream is = getContentResolver().openInputStream(imageUri);
             java.io.File cacheDir = getCacheDir();
 
