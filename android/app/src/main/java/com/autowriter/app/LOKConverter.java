@@ -38,24 +38,12 @@ public class LOKConverter {
     private String lastError = null;
 
     /**
-     * Calculate dynamic page limit based on available memory
-     * Each page takes approximately 3-5MB of memory when rendered
+     * No page limit - process all pages regardless of count
+     * Memory management is handled per-page in convertToImagesViaPdfWithProgress
      */
     private int calculateMaxPages() {
-        Runtime runtime = Runtime.getRuntime();
-        long maxMem = runtime.maxMemory(); // Max heap size
-        long usedMem = runtime.totalMemory() - runtime.freeMemory();
-        long availableMem = maxMem - usedMem;
-
-        // Estimate ~4MB per page for rendering + base64 encoding
-        // Use only 50% of available memory to leave room for other operations
-        long safeMemory = (availableMem / 2) / (4 * 1024 * 1024);
-
-        // Minimum 10 pages, maximum 150 pages
-        int maxPages = Math.max(10, Math.min(150, (int) safeMemory));
-
-        Log.d(TAG, "Dynamic page limit: " + maxPages + " pages (available: " + (availableMem / 1024 / 1024) + "MB)");
-        return maxPages;
+        // No limit - return max value to process all pages
+        return Integer.MAX_VALUE;
     }
 
     /**

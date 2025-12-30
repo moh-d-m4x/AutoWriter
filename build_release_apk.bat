@@ -12,12 +12,13 @@ echo.
 echo Working directory: %CD%
 echo.
 
-echo [1/5] Cleaning previous build...
+echo [1/6] Cleaning previous build...
+if exist "dist" rmdir /s /q "dist"
 if not exist "release\apk" mkdir "release\apk"
 echo √ Clean complete
 echo.
 
-echo [2/5] Building web assets with Vite...
+echo [2/6] Building web assets with Vite...
 call npm run build
 if %errorlevel% neq 0 (
     echo [ERROR] Vite build failed!
@@ -27,7 +28,19 @@ if %errorlevel% neq 0 (
 echo √ Vite build complete
 echo.
 
-echo [3/5] Syncing with Capacitor Android...
+echo [3/6] Cleaning old Android assets...
+:: Clean local android assets
+if exist "android\app\src\main\assets\public\assets" (
+    rmdir /s /q "android\app\src\main\assets\public\assets"
+)
+:: Clean build folder assets
+if exist "C:\AutoWriter_Build\android\app\src\main\assets\public\assets" (
+    rmdir /s /q "C:\AutoWriter_Build\android\app\src\main\assets\public\assets"
+)
+echo √ Old assets cleaned
+echo.
+
+echo [4/6] Syncing with Capacitor Android...
 call npx cap sync android
 if %errorlevel% neq 0 (
     echo [ERROR] Capacitor sync failed!
@@ -37,7 +50,7 @@ if %errorlevel% neq 0 (
 echo √ Capacitor sync complete
 echo.
 
-echo [4/5] Building Android Debug APK...
+echo [5/6] Building Android Debug APK...
 cd C:\AutoWriter_Build\android
 call gradlew.bat clean
 call gradlew.bat assembleDebug
@@ -49,16 +62,16 @@ if %errorlevel% neq 0 (
 echo √ APK build complete
 echo.
 
-echo [5/5] Copying to release folder...
+echo [6/6] Copying to release folder...
 cd /d "%~dp0"
-if exist "release\apk\AutoWriter-1.0.0.apk" del /q "release\apk\AutoWriter-1.0.0.apk"
-copy /y "C:\AutoWriter_Build\android\app\build\outputs\apk\debug\app-debug.apk" "release\apk\AutoWriter-1.0.0.apk"
+if exist "release\apk\AutoWriter-1.0.1.apk" del /q "release\apk\AutoWriter-1.0.1.apk"
+copy /y "C:\AutoWriter_Build\android\app\build\outputs\apk\debug\app-debug.apk" "release\apk\AutoWriter-1.0.1.apk"
 echo √ Release ready
 echo.
 
 echo ========================================
 echo   Build Complete!
-echo   Output: release\apk\AutoWriter-1.0.0.apk
+echo   Output: release\apk\AutoWriter-1.0.1.apk
 echo.
 echo   This APK is signed with debug key.
 echo   Ready for direct installation.

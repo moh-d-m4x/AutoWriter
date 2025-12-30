@@ -60,6 +60,10 @@ public class LOKPlugin extends Plugin {
     public static java.util.List<String> pendingSharedImagePaths = java.util.Collections
             .synchronizedList(new java.util.ArrayList<>());
 
+    // Count of files skipped by MainActivity before reaching LOKPlugin (unsupported
+    // MIME types)
+    public static int skippedSharedCount = 0;
+
     /**
      * LibreOfficeKit code implementation
      * Initialize the plugin - but NOT LibreOffice (lazy init)
@@ -354,10 +358,14 @@ public class LOKPlugin extends Plugin {
     @PluginMethod()
     public void getSharedImage(PluginCall call) {
         synchronized (pendingSharedImagePaths) {
+            Log.d(TAG, "getSharedImage called - pendingSharedImagePaths size: " +
+                    (pendingSharedImagePaths != null ? pendingSharedImagePaths.size() : "null"));
+
             if (pendingSharedImagePaths != null && !pendingSharedImagePaths.isEmpty()) {
                 try {
                     org.json.JSONArray imagesArray = new org.json.JSONArray();
                     org.json.JSONArray filesArray = new org.json.JSONArray();
+                    int skippedCount = 0; // Track unsupported files
 
                     // Supported file extensions - must match JavaScript filtering
                     java.util.Set<String> supportedExtensions = new java.util.HashSet<>(java.util.Arrays.asList(
@@ -380,6 +388,7 @@ public class LOKPlugin extends Plugin {
                                 Log.d(TAG, "Skipping unsupported file: " + fileName);
                                 // Clean up the unsupported file
                                 imageFile.delete();
+                                skippedCount++;
                                 continue;
                             }
 
@@ -420,11 +429,16 @@ public class LOKPlugin extends Plugin {
                     // Clear pending immediately
                     pendingSharedImagePaths.clear();
 
-                    if (filesArray.length() > 0) {
+                    // Combine internal skipped count with MainActivity skipped count
+                    int totalSkipped = skippedCount + skippedSharedCount;
+                    skippedSharedCount = 0; // Reset for next share
+
+                    if (filesArray.length() > 0 || totalSkipped > 0) {
                         JSObject result = new JSObject();
-                        result.put("hasImage", true);
+                        result.put("hasImage", filesArray.length() > 0);
                         result.put("images", imagesArray); // Keep legacy
                         result.put("files", filesArray); // Add new
+                        result.put("skippedCount", totalSkipped); // Total unsupported files skipped
 
                         // For backward compatibility
                         try {
@@ -599,7 +613,20 @@ public class LOKPlugin extends Plugin {
                 }
 
                 File inputFile = new File(inputPath);
+                Log.d(TAG, "Checking input file - path: " + inputPath + ", exists: " + inputFile.exists() + ", length: "
+                        + (inputFile.exists() ? inputFile.length() : -1));
                 if (!inputFile.exists()) {
+                    // List files in cache directory to debug
+                    File cacheDir = getContext().getCacheDir();
+                    String[] files = cacheDir.list();
+                    Log.d(TAG, "Cache directory contents (" + (files != null ? files.length : 0) + " files):");
+                    if (files != null) {
+                        for (String f : files) {
+                            if (f.contains("shared_file")) {
+                                Log.d(TAG, "  - " + f);
+                            }
+                        }
+                    }
                     throw new Exception("Input file not found: " + inputPath);
                 }
 
@@ -623,8 +650,9 @@ public class LOKPlugin extends Plugin {
                                     .post(() -> notifyListeners("conversionProgress", progress));
                         });
 
-                // Delete the original input file after conversion
-                inputFile.delete();
+                // DO NOT delete input file here - it may still be needed for other operations
+                // or cause race conditions when processing multiple files concurrently
+                // Cleanup will happen at app exit or when preview is closed
 
                 if (outputPaths != null && outputPaths.length > 0) {
                     org.json.JSONArray pathsArray = new org.json.JSONArray();
@@ -726,5 +754,123 @@ public class LOKPlugin extends Plugin {
             result.put("error", e.getMessage());
             call.resolve(result);
         }
+    }
+
+    /**
+     * Create PDF from image paths - processes one page at a time to avoid OOM
+     * This is for exporting large files (hundreds of pages) to PDF
+     */
+    @PluginMethod()
+    public void createPdfFromImagePaths(PluginCall call) {
+        Log.d(TAG, "LOKPlugin: createPdfFromImagePaths called");
+
+        org.json.JSONArray pathsArray = call.getArray("paths");
+        String outputName = call.getString("outputName", "export.pdf");
+
+        if (pathsArray == null || pathsArray.length() == 0) {
+            JSObject result = new JSObject();
+            result.put("success", false);
+            result.put("error", "No image paths provided");
+            call.resolve(result);
+            return;
+        }
+
+        executor.execute(() -> {
+            android.graphics.pdf.PdfDocument pdfDoc = null;
+            FileOutputStream fos = null;
+            File outputFile = null;
+
+            try {
+                int totalPages = pathsArray.length();
+                Log.d(TAG, "Creating PDF with " + totalPages + " pages...");
+
+                // Create PDF document
+                pdfDoc = new android.graphics.pdf.PdfDocument();
+
+                // A4 size in pixels at 72 DPI: 595 x 842
+                final int PAGE_WIDTH = 595;
+                final int PAGE_HEIGHT = 842;
+
+                for (int i = 0; i < totalPages; i++) {
+                    String imagePath = pathsArray.getString(i);
+
+                    // Emit progress
+                    final int pageNum = i + 1;
+                    int percent = (int) ((pageNum * 100.0) / totalPages);
+                    JSObject progress = new JSObject();
+                    progress.put("current", pageNum);
+                    progress.put("total", totalPages);
+                    progress.put("percent", percent);
+                    new Handler(Looper.getMainLooper())
+                            .post(() -> notifyListeners("pdfExportProgress", progress));
+
+                    // Load image
+                    android.graphics.Bitmap bitmap = android.graphics.BitmapFactory.decodeFile(imagePath);
+                    if (bitmap == null) {
+                        Log.e(TAG, "Failed to load image: " + imagePath);
+                        continue;
+                    }
+
+                    // Create PDF page
+                    android.graphics.pdf.PdfDocument.PageInfo pageInfo = new android.graphics.pdf.PdfDocument.PageInfo.Builder(
+                            PAGE_WIDTH, PAGE_HEIGHT, pageNum).create();
+                    android.graphics.pdf.PdfDocument.Page page = pdfDoc.startPage(pageInfo);
+
+                    // Scale image to fit page
+                    android.graphics.Canvas canvas = page.getCanvas();
+                    float scaleX = (float) PAGE_WIDTH / bitmap.getWidth();
+                    float scaleY = (float) PAGE_HEIGHT / bitmap.getHeight();
+                    float scale = Math.min(scaleX, scaleY);
+
+                    int scaledWidth = (int) (bitmap.getWidth() * scale);
+                    int scaledHeight = (int) (bitmap.getHeight() * scale);
+                    int left = (PAGE_WIDTH - scaledWidth) / 2;
+                    int top = (PAGE_HEIGHT - scaledHeight) / 2;
+
+                    android.graphics.Rect destRect = new android.graphics.Rect(left, top, left + scaledWidth,
+                            top + scaledHeight);
+                    canvas.drawBitmap(bitmap, null, destRect, null);
+
+                    pdfDoc.finishPage(page);
+
+                    // IMPORTANT: Recycle bitmap to free memory immediately
+                    bitmap.recycle();
+
+                    // Force garbage collection every 50 pages
+                    if (i % 50 == 0) {
+                        System.gc();
+                    }
+                }
+
+                // Write PDF to cache dir
+                outputFile = new File(getContext().getCacheDir(), outputName);
+                fos = new FileOutputStream(outputFile);
+                pdfDoc.writeTo(fos);
+                fos.close();
+                pdfDoc.close();
+
+                Log.d(TAG, "PDF created: " + outputFile.getAbsolutePath() + " (" + outputFile.length() / 1024 + "KB)");
+
+                JSObject result = new JSObject();
+                result.put("success", true);
+                result.put("path", outputFile.getAbsolutePath());
+                result.put("size", outputFile.length());
+                result.put("pages", totalPages);
+                new Handler(Looper.getMainLooper()).post(() -> call.resolve(result));
+
+            } catch (Exception e) {
+                Log.e(TAG, "createPdfFromImagePaths error", e);
+                if (pdfDoc != null) {
+                    try {
+                        pdfDoc.close();
+                    } catch (Exception ignored) {
+                    }
+                }
+                JSObject result = new JSObject();
+                result.put("success", false);
+                result.put("error", e.getMessage());
+                new Handler(Looper.getMainLooper()).post(() -> call.resolve(result));
+            }
+        });
     }
 }

@@ -30,6 +30,9 @@ public class MainActivity extends BridgeActivity {
     @Override
     protected void onNewIntent(android.content.Intent intent) {
         super.onNewIntent(intent);
+        android.util.Log.d("MainActivity",
+                "onNewIntent called - action: " + (intent != null ? intent.getAction() : "null"));
+        setIntent(intent); // Important: update the intent so handleIntent gets the new one
         handleIntent(intent);
     }
 
@@ -40,16 +43,33 @@ public class MainActivity extends BridgeActivity {
         String action = intent.getAction();
         String type = intent.getType();
 
-        // Create a unique key for this intent based on action, data, and type
-        String intentKey = (action != null ? action : "") + "|" +
-                (intent.getData() != null ? intent.getData().toString() : "") + "|" +
-                (type != null ? type : "");
+        // Create a unique key for this intent based on action, data/URIs, and type
+        String intentKey;
+        if (android.content.Intent.ACTION_SEND_MULTIPLE.equals(action)) {
+            // For multi-file intents, include a hash of all URIs
+            java.util.ArrayList<android.net.Uri> uris = intent
+                    .getParcelableArrayListExtra(android.content.Intent.EXTRA_STREAM);
+            String urisHash = (uris != null) ? String.valueOf(uris.hashCode()) : "";
+            intentKey = action + "|" + urisHash + "|" + (type != null ? type : "");
+        } else if (android.content.Intent.ACTION_SEND.equals(action)) {
+            // For single file, include the URI
+            android.net.Uri uri = intent.getParcelableExtra(android.content.Intent.EXTRA_STREAM);
+            String uriStr = (uri != null) ? uri.toString() : "";
+            intentKey = action + "|" + uriStr + "|" + (type != null ? type : "");
+        } else {
+            // For ACTION_VIEW and others
+            intentKey = (action != null ? action : "") + "|" +
+                    (intent.getData() != null ? intent.getData().toString() : "") + "|" +
+                    (type != null ? type : "");
+        }
 
         // Skip if we already fully processed this exact intent
         if (processedIntentUris.contains(intentKey)) {
             android.util.Log.d("MainActivity", "Skipping already-processed intent: " + intentKey);
             return;
         }
+
+        android.util.Log.d("MainActivity", "Processing intent: " + intentKey);
 
         if (android.content.Intent.ACTION_SEND.equals(action) && type != null) {
             android.net.Uri imageUri = (android.net.Uri) intent
@@ -65,9 +85,12 @@ public class MainActivity extends BridgeActivity {
             java.util.ArrayList<android.net.Uri> imageUris = intent
                     .getParcelableArrayListExtra(android.content.Intent.EXTRA_STREAM);
             if (imageUris != null) {
+                android.util.Log.d("MainActivity", "SEND_MULTIPLE: Received " + imageUris.size() + " URIs");
                 for (android.net.Uri uri : imageUris) {
                     processSharedUri(uri);
                 }
+                android.util.Log.d("MainActivity", "Finished processing " + imageUris.size() + " URIs, pendingPaths: "
+                        + LOKPlugin.pendingSharedImagePaths.size());
                 // Consume the extra to prevent duplicate processing
                 intent.removeExtra(android.content.Intent.EXTRA_STREAM);
                 // Mark this intent as fully processed
@@ -86,8 +109,15 @@ public class MainActivity extends BridgeActivity {
 
         // Trigger event if we have pending images
         if (LOKPlugin.pendingSharedImagePaths != null && !LOKPlugin.pendingSharedImagePaths.isEmpty()) {
+            android.util.Log.d("MainActivity", "Pending images: " + LOKPlugin.pendingSharedImagePaths.size()
+                    + ", bridge: " + (getBridge() != null));
             if (getBridge() != null) {
+                android.util.Log.d("MainActivity", "Triggering appSharedImageAvailable event");
                 getBridge().triggerWindowJSEvent("appSharedImageAvailable", "{}");
+                // Clear processed URIs to allow re-sharing the same files later
+                processedIntentUris.clear();
+            } else {
+                android.util.Log.d("MainActivity", "Bridge is null - cannot trigger event yet");
             }
         }
     }
@@ -124,6 +154,7 @@ public class MainActivity extends BridgeActivity {
 
             if (!isSupported) {
                 android.util.Log.d("MainActivity", "Skipping unsupported file type: " + mime);
+                LOKPlugin.skippedSharedCount++; // Track skipped count for notification
                 return; // Skip without loading to prevent OOM
             }
 

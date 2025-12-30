@@ -79,7 +79,8 @@ function App() {
     // Preview modal state
     const [previewState, setPreviewState] = useState({
         show: false,
-        images: [],        // Array of base64 data URLs
+        images: [],        // Array of base64 data URLs (for small files)
+        imagePaths: [],    // Array of file paths (for streaming large files)
         currentPage: 0,
         zoom: 1.0,
         panX: 0,           // Pan offset X
@@ -158,19 +159,20 @@ function App() {
         localStorage.setItem('autowriter_data', JSON.stringify(toSave));
     }, [formData, isLoaded]);
 
-    // Clear cache on app startup (Android only)
-    // This removes any leftover temporary files from previous sessions
-    useEffect(() => {
-        if (isAndroid()) {
-            clearCacheAndroid().then(result => {
-                if (result.count > 0) {
-                    console.log(`Startup: Cleared ${result.count} cached files from previous session`);
-                }
-            }).catch(e => {
-                console.warn('Startup cache clear failed:', e);
-            });
-        }
-    }, []);
+    // NOTE: Cache clearing moved to when preview is closed, NOT on startup
+    // Clearing on startup deletes shared PDF files before they can be processed
+    // The shared files from intents are copied to cache BEFORE the app finishes loading
+    // useEffect(() => {
+    //     if (isAndroid()) {
+    //         clearCacheAndroid().then(result => {
+    //             if (result.count > 0) {
+    //                 console.log(`Startup: Cleared ${result.count} cached files from previous session`);
+    //             }
+    //         }).catch(e => {
+    //             console.warn('Startup cache clear failed:', e);
+    //         });
+    //     }
+    // }, []);
 
     // Auto-resize all textareas on initial load
     useEffect(() => {
@@ -295,6 +297,8 @@ function App() {
 
     useEffect(() => {
         const handleSharedImage = async () => {
+            console.log('handleSharedImage called! isProcessing:', isProcessingSharedRef.current);
+
             // Prevent duplicate concurrent calls
             if (isProcessingSharedRef.current) {
                 console.log('handleSharedImage: Already processing, skipping');
@@ -308,17 +312,33 @@ function App() {
                 setExportFormat('docx-conversion');
                 setExportProgress(0);
 
-                const sharedItems = await checkForSharedImage();
+                const sharedResult = await checkForSharedImage();
+                const sharedItems = sharedResult?.files || [];
+                const nativeSkippedCount = sharedResult?.skippedCount || 0;
+                console.log('sharedItems received:', sharedItems.length, 'native skipped:', nativeSkippedCount);
 
-                // Early exit if no shared items
-                if (!sharedItems || sharedItems.length === 0) {
+                // Show notification for files skipped by native side (unsupported types)
+                if (nativeSkippedCount > 0 && sharedItems.length === 0) {
+                    showToast(`تم تجاهل ${nativeSkippedCount} ${nativeSkippedCount > 1 ? 'ملفات غير مدعومة' : 'ملف غير مدعوم'}`, 'error');
                     setIsExporting(false);
                     isProcessingSharedRef.current = false;
                     return;
                 }
 
+                // Early exit if no shared items
+                if (!sharedItems || sharedItems.length === 0) {
+                    console.log('No shared items - returning');
+                    setIsExporting(false);
+                    isProcessingSharedRef.current = false;
+                    return;
+                }
+
+                // Track native skipped count to add to JS-side skipped count
+                let totalSkippedCount = nativeSkippedCount;
+
                 if (sharedItems.length > 0) {
                     const finalImages = [];
+                    let finalImagePaths = []; // For streaming export of large files
                     let hasConverted = false;
                     let skippedCount = 0;
 
@@ -326,14 +346,15 @@ function App() {
                     const supportedDocs = ['.docx', '.doc', '.pptx', '.ppt', '.xlsx', '.xls', '.pdf'];
                     const supportedImages = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'];
 
-                    // Count document files for progress tracking
-                    const docFiles = sharedItems.filter(item => {
-                        if (typeof item === 'string') return false;
+                    // Count ALL supported files (docs + images) for progress tracking
+                    const allSupportedFiles = sharedItems.filter(item => {
+                        if (typeof item === 'string') return true; // Legacy base64 images
                         const name = (item.name || '').toLowerCase();
-                        return supportedDocs.some(ext => name.endsWith(ext));
+                        return supportedDocs.some(ext => name.endsWith(ext)) ||
+                            supportedImages.some(ext => name.endsWith(ext));
                     });
-                    const totalDocs = docFiles.length;
-                    let currentDoc = 0;
+                    const totalFiles = allSupportedFiles.length;
+                    let currentFile = 0;
 
                     for (const item of sharedItems) {
                         // Legacy string format
@@ -355,12 +376,12 @@ function App() {
                             // Handle documents (PDF, Word, PowerPoint, Excel)
                             // Streaming approach: native processes file directly from path
                             if (item.isDocument && item.path) {
-                                currentDoc++;
+                                currentFile++;
                                 hasConverted = true;
                                 setIsExporting(true);
                                 setExportFormat('docx-conversion');
                                 setExportProgress(0);
-                                setFileProgress({ current: currentDoc, total: totalDocs });
+                                setFileProgress({ current: currentFile, total: totalFiles });
 
                                 // Import the streaming converter
                                 const { convertDocumentFromPath } = await import('./utils/platformExport');
@@ -371,15 +392,21 @@ function App() {
                                 });
 
                                 if (result.success && result.paths && result.paths.length > 0) {
+                                    // Store ALL paths for streaming export later
                                     tempImagePathsRef.current = [...tempImagePathsRef.current, ...result.paths];
 
-                                    // Load images one by one from file paths
+                                    // For large files: only load first 10 pages for preview, store all paths for export
+                                    // Load all images into memory for preview
+                                    // For extremely large files, we might want to paginate, but user requested ALL pages
                                     for (const path of result.paths) {
                                         const base64 = await getImageBase64ByPath(path);
                                         if (base64) {
                                             finalImages.push(`data:image/png;base64,${base64}`);
                                         }
                                     }
+
+                                    // Accumulate all paths for streaming export (memory efficient export)
+                                    finalImagePaths = [...finalImagePaths, ...result.paths];
                                 } else {
                                     showToast(result.error || 'فشل تحويل الملف', 'error');
                                 }
@@ -427,6 +454,9 @@ function App() {
                                 setFileProgress({ current: 0, total: 0 });
                             } else if (isImage && item.data) {
                                 // Supported Image
+                                currentFile++;
+                                setFileProgress({ current: currentFile, total: totalFiles });
+
                                 let mime = 'image/png';
                                 if (name.endsWith('.jpg') || name.endsWith('.jpeg')) mime = 'image/jpeg';
                                 if (name.endsWith('.webp')) mime = 'image/webp';
@@ -437,15 +467,14 @@ function App() {
                         }
                     }
 
-                    // Show notification about skipped unsupported files
-                    if (skippedCount > 0) {
-                        showToast(`تم تجاهل ${skippedCount} ${skippedCount > 1 ? 'ملفات غير مدعومة' : 'ملف غير مدعوم'}`, 'error');
-                    }
+                    // Calculate total skipped for combined message
+                    const totalSkipped = skippedCount + nativeSkippedCount;
 
                     if (finalImages.length > 0) {
                         setPreviewState({
                             show: true,
                             images: finalImages,
+                            imagePaths: finalImagePaths, // For streaming export of large files
                             currentPage: 0,
                             zoom: 1.0,
                             panX: 0,
@@ -453,11 +482,25 @@ function App() {
                             isLoading: false,
                             isExternal: true
                         });
-                        if (hasConverted) showToast('تم تحويل الملف بنجاح', 'success');
-                        else showToast(`تم استلام ${finalImages.length > 1 ? finalImages.length + ' صور' : 'صورة'}`, 'success');
+
+                        // Show combined success message with skipped count if any
+                        if (hasConverted) {
+                            if (totalSkipped > 0) {
+                                showToast(`تم تحويل الملف بنجاح، وتم تجاهل ${totalSkipped} ${totalSkipped > 1 ? 'ملفات' : 'ملف'}`, 'success');
+                            } else {
+                                showToast('تم تحويل الملف بنجاح', 'success');
+                            }
+                        } else {
+                            if (totalSkipped > 0) {
+                                showToast(`تم استلام ${finalImages.length > 1 ? finalImages.length + ' صور' : 'صورة'}، وتم تجاهل ${totalSkipped} ${totalSkipped > 1 ? 'ملفات' : 'ملف'}`, 'success');
+                            } else {
+                                showToast(`تم استلام ${finalImages.length > 1 ? finalImages.length + ' صور' : 'صورة'}`, 'success');
+                            }
+                        }
 
                         // Cleanup temp image files after loading into memory
-                        if (tempImagePathsRef.current.length > 0) {
+                        // BUT: Don't cleanup if using streaming export (finalImagePaths has paths)
+                        if (tempImagePathsRef.current.length > 0 && finalImagePaths.length === 0) {
                             cleanupImageFiles(tempImagePathsRef.current);
                             tempImagePathsRef.current = [];
                         }
@@ -529,7 +572,14 @@ function App() {
                         setConfirmModal({
                             show: true,
                             message: 'هل أنت متأكد من الخروج من التطبيق؟',
-                            onConfirm: () => {
+                            onConfirm: async () => {
+                                // Clean up all cached files before exiting
+                                try {
+                                    await clearCacheAndroid();
+                                    console.log('Cache cleared before exit');
+                                } catch (e) {
+                                    console.warn('Failed to clear cache:', e);
+                                }
                                 exitAppAndroid();
                             }
                         });
@@ -751,10 +801,6 @@ function App() {
             const files = result.files || [];
             const skippedCount = result.skippedCount || 0;
 
-            // Show notification about skipped unsupported files
-            if (skippedCount > 0) {
-                showToast(`تم تجاهل ${skippedCount} ${skippedCount > 1 ? 'ملفات غير مدعومة' : 'ملف غير مدعوم'}`, 'error');
-            }
 
             if (files && files.length > 0) {
                 let hasConverted = false;
@@ -817,16 +863,17 @@ function App() {
                         newImages.push(`data:${mime};base64,${file.data}`);
                     }
                 }
-
-                if (hasConverted && newImages.length > 0) {
-                    showToast('تم تحويل المستندات بنجاح', 'success');
-                }
             }
 
             if (newImages.length > 0) {
                 setPreviewState(prev => ({ ...prev, images: [...prev.images, ...newImages] }));
                 setAddedImages(prev => [...prev, ...newImages]);
-                showToast(`تم إضافة ${newImages.length} ${newImages.length > 1 ? 'صفحات' : 'صفحة'} بنجاح`);
+                // Combined success message with skipped count if any
+                if (skippedCount > 0) {
+                    showToast(`تم إضافة ${newImages.length} ${newImages.length > 1 ? 'صفحات' : 'صفحة'} بنجاح، وتم تجاهل ${skippedCount} ${skippedCount > 1 ? 'ملفات' : 'ملف'}`);
+                } else {
+                    showToast(`تم إضافة ${newImages.length} ${newImages.length > 1 ? 'صفحات' : 'صفحة'} بنجاح`);
+                }
             }
         } catch (e) { console.error(e); }
     };
@@ -1177,7 +1224,9 @@ function App() {
             const xmlFiles = ['word/document.xml', 'word/header1.xml', 'word/header2.xml', 'word/header3.xml'];
 
             // Prepare replacement data with RTL fix for Arabic/English mixed content
-            const fixArabicText = (text) => {
+            // useParagraphBreaks: when true, newlines create real paragraph breaks (Enter)
+            //                     when false, newlines create line breaks within same paragraph (Shift+Enter)
+            const fixArabicText = (text, useParagraphBreaks = false) => {
                 if (!text) return '';
 
                 const needsFix = /[a-zA-Z0-9\/]|\\/.test(text) || /\.{2,}/.test(text);
@@ -1254,7 +1303,12 @@ function App() {
                         .replace(/\$/g, '$$$$');
                 });
 
-                return processedLines.join('</w:t><w:br/><w:t>');
+                // For paragraph breaks: close current run/paragraph, start new paragraph with RTL and matching formatting
+                // For line breaks: use <w:br/> which is a soft line break within same paragraph
+                const separator = useParagraphBreaks
+                    ? '</w:t></w:r></w:p><w:p><w:pPr><w:spacing w:after="120"/><w:jc w:val="lowKashida"/></w:pPr><w:r><w:rPr><w:rFonts w:asciiTheme="minorBidi" w:hAnsiTheme="minorBidi" w:cs="Arial" w:hint="cs"/><w:sz w:val="36"/><w:szCs w:val="36"/><w:rtl/></w:rPr><w:t>'
+                    : '</w:t><w:br/><w:t>';
+                return processedLines.join(separator);
             };
 
             const replacements = {
@@ -1265,7 +1319,7 @@ function App() {
                 'to_the': fixArabicText(formData.to_the),
                 'greetings': fixArabicText(formData.greetings),
                 'subject_name': fixArabicText(formData.subject_name),
-                'subject': fixArabicText(formData.subject),
+                'subject': fixArabicText(formData.subject, true), // Use paragraph breaks for subject field
                 'ending': fixArabicText(formData.ending),
                 'sign': fixArabicText(formData.sign),
                 'copy_to': fixArabicText(formData.copy_to),
@@ -1277,7 +1331,7 @@ function App() {
                 'للالمحترملل': fixArabicText(formData.to_the),
                 'للالسلام عليكم ورحمة الله وبركاتهلل': fixArabicText(formData.greetings),
                 'للالموضوعلل': fixArabicText(formData.subject_name),
-                'للتحية طيبة وبعدلل': fixArabicText(formData.subject),
+                'للتحية طيبة وبعدلل': fixArabicText(formData.subject, true),
                 'للوشكرالل': fixArabicText(formData.ending),
                 'للالتوقيعلل': fixArabicText(formData.sign)
             };
@@ -2136,13 +2190,60 @@ function App() {
 
     // External: Export to PDF
     const handleExternalExportPdf = async () => {
-        if (previewState.images.length === 0) return;
+        if (previewState.images.length === 0 && (!previewState.imagePaths || previewState.imagePaths.length === 0)) return;
 
         setIsExporting(true);
         setExportFormat('pdf'); // Enable cancel button
-        setExportProgress(10); // Initial progress
+        setExportProgress(0); // Initial progress
         exportCancelledRef.current = false;
+
         try {
+            // Check what we have to export
+            const hasFilePaths = previewState.imagePaths && previewState.imagePaths.length > 0;
+            const hasMemoryImages = previewState.images && previewState.images.length > 0;
+
+            // Combine BOTH sources: images from file paths AND base64 images
+            // For mixed content (e.g., document + shared image), we need all of them
+
+            if (hasFilePaths && isAndroid() && !hasMemoryImages) {
+                // Pure file paths mode (no memory images) - use native PDF for efficiency
+                const { createPdfFromImagePaths } = await import('./utils/platformExport');
+
+                const pdfResult = await createPdfFromImagePaths(
+                    previewState.imagePaths,
+                    `exported_${Date.now()}.pdf`,
+                    (current, total, percent) => {
+                        setExportProgress(percent);
+                    }
+                );
+
+                if (pdfResult.success) {
+                    const { shareFileAndroid, shareMultipleFilesAndroid } = await import('./utils/platformExport');
+                    // Native returns absolute paths, need to convert to file:// URIs for Share plugin
+                    const rawPaths = pdfResult.paths || [pdfResult.path];
+                    const paths = rawPaths.map(p => p.startsWith('file://') ? p : `file://${p}`);
+
+                    if (paths.length === 1) {
+                        // Single PDF
+                        const shareResult = await shareFileAndroid(paths[0], `exported_${Date.now()}.pdf`, 'application/pdf');
+                        if (shareResult.success && !shareResult.cancelled) {
+                            showToast(`تم تصدير PDF بنجاح (${pdfResult.pages} صفحة)`);
+                        }
+                    } else {
+                        // Multiple PDFs (batches) - share all
+                        const shareResult = await shareMultipleFilesAndroid(paths, 'application/pdf');
+                        if (shareResult.success && !shareResult.cancelled) {
+                            showToast(`تم تصدير PDF بنجاح (${pdfResult.pages} صفحة في ${paths.length} أجزاء)`);
+                        }
+                    }
+                } else {
+                    throw new Error(pdfResult.error || 'PDF creation failed');
+                }
+                return;
+            }
+
+            // Mixed mode OR PC: use jsPDF which can handle both file paths and base64
+            // Always use previewState.images which contains ALL loaded images
             const doc = new jsPDF({
                 orientation: 'p',
                 unit: 'mm',
@@ -2151,17 +2252,26 @@ function App() {
 
             const pdfWidth = doc.internal.pageSize.getWidth();
             const pdfHeight = doc.internal.pageSize.getHeight();
+
+            // Use images array which contains ALL images (from docs + shared images)
             const totalImages = previewState.images.length;
 
-            for (let i = 0; i < previewState.images.length; i++) {
+            for (let i = 0; i < totalImages; i++) {
                 // Check cancellation
                 if (exportCancelledRef.current) throw new Error('CANCELLED');
 
-                // Update progress based on image index (10-90%)
-                setExportProgress(10 + Math.round((i / totalImages) * 80));
+                // Update progress based on page index (shows actual page progress)
+                const percent = Math.round(((i + 1) / totalImages) * 100);
+                setExportProgress(percent);
+
+                // Yield to allow UI to update (every 5 pages)
+                if (i % 5 === 0) {
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                }
 
                 if (i > 0) doc.addPage();
 
+                // Get image data from previewState.images (contains ALL loaded images)
                 const imgData = previewState.images[i];
 
                 // Compress image to reduce file size
@@ -2279,6 +2389,153 @@ function App() {
         }
     };
 
+    // External: Export to Image(s)
+    const handleExternalExportImage = async () => {
+        if (previewState.images.length === 0 && (!previewState.imagePaths || previewState.imagePaths.length === 0)) return;
+
+        setIsExporting(true);
+        setExportFormat('png'); // Enable cancel button
+        setExportProgress(0);
+        exportCancelledRef.current = false;
+
+        try {
+            // Always use previewState.images which contains ALL images (from docs + shared images)
+            const totalImages = previewState.images.length;
+
+            if (combineImagePages) {
+                // Combined mode: merge all images into one
+                const loadImg = (src) => new Promise((resolve, reject) => {
+                    const img = new Image();
+                    img.onload = () => resolve(img);
+                    img.onerror = reject;
+                    img.src = src;
+                });
+
+                // Load all images from previewState.images (contains ALL images)
+                const loadedImages = [];
+                for (let i = 0; i < totalImages; i++) {
+                    if (exportCancelledRef.current) throw new Error('CANCELLED');
+                    setExportProgress(Math.round(((i + 1) / totalImages) * 50)); // First 50%: loading
+
+                    const imgData = previewState.images[i];
+                    if (imgData) {
+                        const img = await loadImg(imgData);
+                        loadedImages.push(img);
+                    }
+                }
+
+                if (exportCancelledRef.current) throw new Error('CANCELLED');
+
+                // Calculate combined dimensions
+                let totalHeight = 0;
+                let maxWidth = 0;
+                for (const img of loadedImages) {
+                    totalHeight += img.height;
+                    maxWidth = Math.max(maxWidth, img.width);
+                }
+
+                // Create canvas and draw all images
+                const canvas = document.createElement('canvas');
+                canvas.width = maxWidth;
+                canvas.height = totalHeight;
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillRect(0, 0, maxWidth, totalHeight);
+
+                let yOffset = 0;
+                for (const img of loadedImages) {
+                    const xOffset = (maxWidth - img.width) / 2;
+                    ctx.drawImage(img, xOffset, yOffset);
+                    yOffset += img.height;
+                }
+
+                setExportProgress(75); // Canvas complete
+
+                // Convert to buffer
+                const dataUrl = canvas.toDataURL('image/png');
+                const base64 = dataUrl.split(',')[1];
+                const binary = atob(base64);
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) {
+                    bytes[i] = binary.charCodeAt(i);
+                }
+
+                if (exportCancelledRef.current) throw new Error('CANCELLED');
+
+                // Save
+                const filename = `exported_combined_${Date.now()}.png`;
+                if (isElectron() && window.electronAPI) {
+                    const result = await window.electronAPI.saveDocument({
+                        buffer: Array.from(bytes),
+                        defaultName: filename,
+                        filters: [{ name: 'PNG Image', extensions: ['png'] }]
+                    });
+                    if (result.success) showToast('تم حفظ الصورة بنجاح');
+                } else if (isAndroid()) {
+                    const saveResult = await saveFileAndroid(Array.from(bytes), filename, 'image/png');
+                    if (saveResult.success && !saveResult.cancelled) {
+                        showToast('تم حفظ الصورة بنجاح');
+                    }
+                }
+            } else {
+                // Separate images mode
+                const files = [];
+                const baseName = `exported_${Date.now()}`;
+
+                for (let i = 0; i < totalImages; i++) {
+                    if (exportCancelledRef.current) throw new Error('CANCELLED');
+                    setExportProgress(Math.round(((i + 1) / totalImages) * 80));
+
+                    const imgData = previewState.images[i];
+
+                    if (imgData) {
+                        // Convert data URL to buffer
+                        const base64 = imgData.split(',')[1];
+                        const binary = atob(base64);
+                        const bytes = new Uint8Array(binary.length);
+                        for (let j = 0; j < binary.length; j++) {
+                            bytes[j] = binary.charCodeAt(j);
+                        }
+                        files.push({
+                            buffer: bytes,
+                            filename: `${baseName}_page${i + 1}.png`
+                        });
+                    }
+                }
+
+                if (exportCancelledRef.current) throw new Error('CANCELLED');
+                setExportProgress(90);
+
+                // Save all images
+                if (isElectron() && window.electronAPI) {
+                    const result = await window.electronAPI.saveMultipleImages(
+                        files.map(f => ({ buffer: Array.from(f.buffer) })),
+                        baseName
+                    );
+                    if (result.success) showToast(`تم حفظ ${result.count} صورة بنجاح`);
+                } else if (isAndroid()) {
+                    const saveResult = await saveMultipleFilesAndroid(files, 'حفظ أو مشاركة الصور');
+                    if (saveResult.success && !saveResult.cancelled) {
+                        showToast(`تم مشاركة ${saveResult.count} صورة بنجاح`);
+                    }
+                }
+            }
+
+        } catch (e) {
+            if (e.message === 'CANCELLED') {
+                showToast('تم إلغاء التصدير', 'info');
+            } else {
+                console.error(e);
+                showToast('خطأ في التصدير: ' + e.message, 'error');
+            }
+        } finally {
+            setIsExporting(false);
+            setExportProgress(0);
+            // NOTE: Cleanup disabled - user requested ability to re-export
+            // Files will be cleaned up when preview is closed or app exits
+        }
+    };
+
     // Handle document preview - generates images and shows in overlay
     const handlePreview = async () => {
         try {
@@ -2306,7 +2563,8 @@ function App() {
             const xmlFiles = ['word/document.xml', 'word/header1.xml', 'word/header2.xml', 'word/header3.xml'];
 
             // Prepare replacement data with RTL fix
-            const fixArabicText = (text) => {
+            // useParagraphBreaks: when true, newlines create real paragraph breaks (Enter)
+            const fixArabicText = (text, useParagraphBreaks = false) => {
                 if (!text) return '';
                 const needsFix = /[a-zA-Z0-9\/]|\\/.test(text) || /\.{2,}/.test(text);
                 let processedText = text;
@@ -2326,14 +2584,18 @@ function App() {
                 const processedLines = lines.map(line => {
                     return line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;').replace(/\$/g, '$$$$');
                 });
-                return processedLines.join('</w:t><w:br/><w:t>');
+                // For paragraph breaks: close current run/paragraph, start new paragraph with RTL and matching formatting
+                const separator = useParagraphBreaks
+                    ? '</w:t></w:r></w:p><w:p><w:pPr><w:spacing w:after="120"/><w:jc w:val="lowKashida"/></w:pPr><w:r><w:rPr><w:rFonts w:asciiTheme="minorBidi" w:hAnsiTheme="minorBidi" w:cs="Arial" w:hint="cs"/><w:sz w:val="36"/><w:szCs w:val="36"/><w:rtl/></w:rPr><w:t>'
+                    : '</w:t><w:br/><w:t>';
+                return processedLines.join(separator);
             };
 
             const replacements = {
                 'from': fixArabicText(formData.from), 'parent_company': fixArabicText(formData.parent_company),
                 'subsidiary_company': fixArabicText(formData.subsidiary_company), 'to': fixArabicText(formData.to),
                 'to_the': fixArabicText(formData.to_the), 'greetings': fixArabicText(formData.greetings),
-                'subject_name': fixArabicText(formData.subject_name), 'subject': fixArabicText(formData.subject),
+                'subject_name': fixArabicText(formData.subject_name), 'subject': fixArabicText(formData.subject, true),
                 'ending': fixArabicText(formData.ending), 'sign': fixArabicText(formData.sign), 'copy_to': fixArabicText(formData.copy_to),
                 'للالأوللل': fixArabicText(formData.parent_company) || ' ',
                 'للالثانيلل': fixArabicText(formData.subsidiary_company) || ' ',
@@ -2341,7 +2603,7 @@ function App() {
                 'للالاخلل': fixArabicText(formData.to), 'للالمحترملل': fixArabicText(formData.to_the),
                 'للالسلام عليكم ورحمة الله وبركاتهلل': fixArabicText(formData.greetings),
                 'للالموضوعلل': fixArabicText(formData.subject_name),
-                'للتحية طيبة وبعدلل': fixArabicText(formData.subject), 'للوشكرالل': fixArabicText(formData.ending), 'للالتوقيعلل': fixArabicText(formData.sign)
+                'للتحية طيبة وبعدلل': fixArabicText(formData.subject, true), 'للوشكرالل': fixArabicText(formData.ending), 'للالتوقيعلل': fixArabicText(formData.sign)
             };
 
             const directTextKeys = Object.keys(replacements).filter(k => /[\u0600-\u06FF]/.test(k));
@@ -2986,20 +3248,36 @@ function App() {
                             ) : (
                                 <div className="preview-export-bar external-mode">
                                     <button
-                                        className="preview-export-btn add-images"
-                                        onClick={handleExternalAddImages}
-                                        disabled={isExporting}
-                                    >
-                                        <span className="icon">➕</span>
-                                        <span>إضافة مستندات</span>
-                                    </button>
-                                    <button
                                         className="preview-export-btn export-pdf"
                                         onClick={handleExternalExportPdf}
                                         disabled={isExporting}
                                     >
                                         <span className="icon">📕</span>
                                         <span>تصدير PDF</span>
+                                    </button>
+                                    <button
+                                        className="preview-export-btn image"
+                                        onClick={handleExternalExportImage}
+                                        disabled={isExporting}
+                                    >
+                                        <span className="icon">🖼️</span>
+                                        <span>صورة</span>
+                                    </button>
+                                    <label className="preview-combine-option">
+                                        <input
+                                            type="checkbox"
+                                            checked={combineImagePages}
+                                            onChange={(e) => setCombineImagePages(e.target.checked)}
+                                        />
+                                        <span>دمج الصفحات</span>
+                                    </label>
+                                    <button
+                                        className="preview-export-btn add-images"
+                                        onClick={handleExternalAddImages}
+                                        disabled={isExporting}
+                                    >
+                                        <span className="icon">➕</span>
+                                        <span>إضافة مستندات</span>
                                     </button>
                                 </div>
                             )}
@@ -3342,7 +3620,7 @@ function App() {
                 </svg>
             </button>
 
-            {/* Loading Overlay with Growing Progress Arc */}
+            {/* Loading Overlay with Progress Arc */}
             {isExporting && (
                 <div className="loading-overlay">
                     <div className="loading-content">

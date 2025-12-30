@@ -1626,16 +1626,22 @@ textarea {
 .preview-export-btn.docx {
   background: linear-gradient(135deg, #2b579a 0%, #1e3a6e 100%);
   color: white;
+  flex: 1;
+  justify-content: center;
 }
 
 .preview-export-btn.pdf {
   background: linear-gradient(135deg, #c41e3a 0%, #8b1428 100%);
   color: white;
+  flex: 1;
+  justify-content: center;
 }
 
 .preview-export-btn.image {
   background: linear-gradient(135deg, #1a5a3c 0%, #0d3d28 100%);
   color: white;
+  flex: 1;
+  justify-content: center;
 }
 
 .preview-export-btn:hover {
@@ -1714,11 +1720,16 @@ textarea {
   color: white;
 }
 
-/* External mode - smaller add-images button to fit beside export-pdf */
+/* External mode - add-images on line 2, others on line 1 */
 .preview-export-bar.external-mode .preview-export-btn.add-images {
-  flex-basis: auto;
+  flex: 0 0 100%;
+  width: 100%;
+  margin-top: 4px;
+  justify-content: center;
+}
+
+.preview-export-bar.external-mode .preview-export-btn.image {
   flex: 1;
-  margin-top: 0;
   justify-content: center;
 }
 

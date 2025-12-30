@@ -85,6 +85,39 @@ export const shareFileAndroid = async (uri, filename, mimeType) => {
 };
 
 /**
+ * Share multiple files by URIs
+ * @param {string[]} uris - Array of file URIs
+ * @param {string} mimeType - MIME type of all files
+ */
+export const shareMultipleFilesAndroid = async (uris, mimeType = 'application/pdf') => {
+    try {
+        // Share.share only supports single file, so for multiple files
+        // we share each one sequentially or use the first one
+        if (uris.length === 1) {
+            return await shareFileAndroid(uris[0], 'document.pdf', mimeType);
+        }
+
+        // For multiple files, share the first and notify about others
+        // Note: Capacitor Share doesn't support multiple files natively
+        await Share.share({
+            title: `${uris.length} PDF files`,
+            url: uris[0], // Share first file
+            dialogTitle: `حفظ أو مشاركة (${uris.length} ملفات)`,
+        });
+
+        return { success: true, count: uris.length };
+    } catch (error) {
+        if (error.message && (
+            error.message.includes('cancel') ||
+            error.message.includes('Cancel')
+        )) {
+            return { success: true, cancelled: true };
+        }
+        return { success: false, error: error.message };
+    }
+};
+
+/**
  * Save file on Android using Filesystem plugin
  * @param {Uint8Array|number[]} buffer - File content
  * @param {string} filename - Name of file to save
@@ -435,6 +468,54 @@ export const convertDocumentFromPath = async (inputPath, baseName = 'page', onPr
 };
 
 /**
+ * Create PDF from image paths - native processing to avoid JS memory issues
+ * Processes one page at a time with memory recycling
+ * @param {string[]} paths - Array of image file paths
+ * @param {string} outputName - Output PDF filename
+ * @param {function} onProgress - Callback(current, total, percent)
+ * @returns {Promise<{success: boolean, path?: string, pages?: number, error?: string}>}
+ */
+export const createPdfFromImagePaths = async (paths, outputName = 'export.pdf', onProgress = null) => {
+    if (!isAndroid()) {
+        return { success: false, error: 'Only supported on Android' };
+    }
+
+    try {
+        // Register progress listener if callback provided
+        let progressListener = null;
+        if (onProgress) {
+            progressListener = await LOKPlugin.addListener('pdfExportProgress', (data) => {
+                onProgress(data.current, data.total, data.percent);
+            });
+        }
+
+        const result = await LOKPlugin.createPdfFromImagePaths({
+            paths: paths,
+            outputName: outputName
+        });
+
+        // Remove listener
+        if (progressListener) {
+            progressListener.remove();
+        }
+
+        if (result.success) {
+            return {
+                success: true,
+                path: result.path,
+                pages: result.pages,
+                size: result.size
+            };
+        } else {
+            return { success: false, error: result.error || 'PDF creation failed' };
+        }
+    } catch (error) {
+        console.error('createPdfFromImagePaths error:', error);
+        return { success: false, error: error.message };
+    }
+};
+
+/**
  * Get single image as Base64 from file path
  * @param {string} path - File path to image
  * @returns {Promise<string|null>} Base64 string or null
@@ -482,22 +563,29 @@ export default {
 
 /**
  * Check if the app was launched with a shared image (or received one while running)
- * Returns array of base64 strings or null
+ * Returns object { files: array, skippedCount: number } or null
  */
 export const checkForSharedImage = async () => {
     if (isAndroid()) {
         try {
             console.log('Checking for shared image...');
             const result = await LOKPlugin.getSharedImage();
+            const skippedCount = result.skippedCount || 0;
+
             if (result.hasImage) {
                 console.log('Shared content found');
+                let files = null;
                 if (result.files && Array.isArray(result.files)) {
-                    return result.files;
+                    files = result.files;
                 } else if (result.images && Array.isArray(result.images)) {
-                    return result.images;
+                    files = result.images;
                 } else if (result.image) {
-                    return [result.image];
+                    files = [result.image];
                 }
+                return { files, skippedCount };
+            } else if (skippedCount > 0) {
+                // Only unsupported files were shared
+                return { files: null, skippedCount };
             }
         } catch (e) {
             console.error('Error checking shared image', e);

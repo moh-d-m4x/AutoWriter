@@ -53,14 +53,14 @@ echo √ EXE build complete
 echo.
 
 echo [5/5] Moving to release folder...
-if exist "release\exe\AutoWriter-1.0.0-Setup.exe" del /q "release\exe\AutoWriter-1.0.0-Setup.exe"
-move /y "build_temp\AutoWriter-1.0.0-Setup.exe" "release\exe\"
+if exist "release\exe\AutoWriter-1.0.1-Setup.exe" del /q "release\exe\AutoWriter-1.0.1-Setup.exe"
+move /y "build_temp\AutoWriter-1.0.1-Setup.exe" "release\exe\"
 rmdir /s /q "build_temp"
 echo √ Release ready
 echo.
 
 echo ========================================
 echo   Build Complete!
-echo   Output: release\exe\AutoWriter-1.0.0-Setup.exe
+echo   Output: release\exe\AutoWriter-1.0.1-Setup.exe
 echo ========================================
 pause
