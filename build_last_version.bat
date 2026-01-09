@@ -43,7 +43,7 @@ echo ✓ Capacitor sync complete
 echo.
 
 echo [5/6] Cleaning and Building Android APK...
-cd C:\AutoWriter_Build\android
+cd android
 call gradlew.bat clean
 call gradlew.bat assembleDebug
 if %errorlevel% neq 0 (
@@ -55,7 +55,8 @@ echo ✓ APK build complete
 echo.
 
 echo [6/6] Installing APK on device...
-"%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe" install -r "app\build\outputs\apk\debug\app-debug.apk"
+cd ..
+"%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe" install -r "android\app\build\outputs\apk\debug\app-debug.apk"
 if %errorlevel% neq 0 (
     echo ERROR: APK installation failed!
     echo Make sure your device is connected and USB debugging is enabled.

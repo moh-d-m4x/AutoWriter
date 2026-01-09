@@ -64,14 +64,14 @@ echo.
 
 echo [6/6] Copying to release folder...
 cd /d "%~dp0"
-if exist "release\apk\AutoWriter-1.0.1.apk" del /q "release\apk\AutoWriter-1.0.1.apk"
-copy /y "C:\AutoWriter_Build\android\app\build\outputs\apk\debug\app-debug.apk" "release\apk\AutoWriter-1.0.1.apk"
+if exist "release\apk\AutoWriter-1.1.0.apk" del /q "release\apk\AutoWriter-1.1.0.apk"
+copy /y "C:\AutoWriter_Build\android\app\build\outputs\apk\debug\app-debug.apk" "release\apk\AutoWriter-1.1.0.apk"
 echo √ Release ready
 echo.
 
 echo ========================================
 echo   Build Complete!
-echo   Output: release\apk\AutoWriter-1.0.1.apk
+echo   Output: release\apk\AutoWriter-1.1.0.apk
 echo.
 echo   This APK is signed with debug key.
 echo   Ready for direct installation.

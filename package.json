@@ -1,6 +1,6 @@
 {
   "name": "autowriter",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Document Template Filler App",
   "main": "electron/main.cjs",
   "scripts": {
@@ -22,6 +22,7 @@
     "@capacitor/share": "^8.0.0",
     "@capacitor/splash-screen": "^8.0.0",
     "@capawesome/capacitor-file-picker": "^8.0.0",
+    "@capgo/capacitor-speech-recognition": "^8.0.3",
     "canvas": "^3.2.0",
     "docx-preview": "^0.3.7",
     "docx2pdf-converter": "^2.1.1",

@@ -99,6 +99,34 @@ function App() {
     // Source selection dialog state (Android only - camera or file picker)
     const [showSourceDialog, setShowSourceDialog] = useState(false);
 
+    // AI Enhancement settings state
+    const [aiSettings, setAiSettings] = useState({
+        apiKey: '',
+        enhanceSubjectName: true,
+        enhanceSubject: true
+    });
+    const [showAISettingsModal, setShowAISettingsModal] = useState(false);
+    const [isClosingModal, setIsClosingModal] = useState(false);
+    const [isEnhancing, setIsEnhancing] = useState(false);
+    const [aiConnectionStatus, setAiConnectionStatus] = useState({ message: '', type: '' }); // 'success' or 'error'
+    const [tempAiSettings, setTempAiSettings] = useState({ apiKey: '', enhanceSubjectName: true, enhanceSubject: true });
+    // Undo/Redo state for AI enhancement
+    const [enhancementHistory, setEnhancementHistory] = useState({
+        originalSubjectName: null,
+        originalSubject: null,
+        enhancedSubjectName: null,
+        enhancedSubject: null,
+        isUndone: false, // true = showing original, false = showing enhanced
+        hasHistory: false // true if there's something to undo/redo
+    });
+
+    // Voice recording state
+    const [isRecording, setIsRecording] = useState(false);
+    const [recordingTime, setRecordingTime] = useState(0);
+    const [isTranscribing, setIsTranscribing] = useState(false);
+    const [liveTranscript, setLiveTranscript] = useState('');
+    const recordingIntervalRef = useRef(null);
+
     // Show toast notification
     const showToast = (message, type = 'success') => {
         setToast({ show: true, message, type });
@@ -188,6 +216,17 @@ function App() {
         }
     }, [isLoaded]);
 
+    // Auto-resize subject textarea when STT updates it
+    useEffect(() => {
+        if (isRecording && formData.subject) {
+            const subjectTextarea = document.getElementById('subject');
+            if (subjectTextarea) {
+                subjectTextarea.style.height = 'auto';
+                subjectTextarea.style.height = subjectTextarea.scrollHeight + 'px';
+            }
+        }
+    }, [formData.subject, isRecording]);
+
     // Disable body scroll when preview is open
     useEffect(() => {
         if (previewState.show) {
@@ -199,6 +238,19 @@ function App() {
             document.body.style.overflow = '';
         };
     }, [previewState.show]);
+
+    // Load AI settings from localStorage on mount
+    useEffect(() => {
+        const savedAiSettings = localStorage.getItem('autowriter_ai_settings');
+        if (savedAiSettings) {
+            try {
+                const parsed = JSON.parse(savedAiSettings);
+                setAiSettings(parsed);
+            } catch (e) {
+                console.error('Error loading AI settings:', e);
+            }
+        }
+    }, []);
 
     // Handle files opened via "Open with" on PC (Electron only)
     useEffect(() => {
@@ -610,6 +662,395 @@ function App() {
         }));
         // Auto-resize textareas
         autoResize(e.target);
+    };
+
+    // ============== AI Enhancement Functions ==============
+
+    // Open AI settings modal
+    const openAISettingsModal = () => {
+        setTempAiSettings({ ...aiSettings });
+        setAiConnectionStatus({ message: '', type: '' });
+        setShowAISettingsModal(true);
+    };
+
+    // Close AI settings modal with animation
+    const closeAISettingsModal = () => {
+        setIsClosingModal(true);
+        setTimeout(() => {
+            setShowAISettingsModal(false);
+            setIsClosingModal(false);
+            setAiConnectionStatus({ message: '', type: '' });
+        }, 250); // Match CSS animation duration
+    };
+
+    // Test Gemini API connection (using models list - free, no tokens)
+    const testGeminiConnection = async (apiKey) => {
+        try {
+            // Use GET models endpoint - doesn't cost any tokens
+            const response = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
+                {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                }
+            );
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error?.message || 'فشل الاتصال');
+            }
+            return { success: true };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    };
+
+    // Save AI settings
+    const saveAISettings = async () => {
+        const newApiKey = tempAiSettings.apiKey.trim();
+
+        if (!newApiKey) {
+            setAiConnectionStatus({ message: 'يرجى إدخال مفتاح API', type: 'error' });
+            return;
+        }
+
+        // Check if API key was changed
+        const apiKeyChanged = newApiKey !== aiSettings.apiKey;
+
+        if (apiKeyChanged) {
+            // Test connection if API key changed
+            setAiConnectionStatus({ message: 'جاري اختبار الاتصال...', type: '' });
+
+            const result = await testGeminiConnection(newApiKey);
+
+            if (result.success) {
+                // Save all settings to state and localStorage
+                const newSettings = {
+                    apiKey: newApiKey,
+                    enhanceSubjectName: tempAiSettings.enhanceSubjectName,
+                    enhanceSubject: tempAiSettings.enhanceSubject
+                };
+                setAiSettings(newSettings);
+                localStorage.setItem('autowriter_ai_settings', JSON.stringify(newSettings));
+                setAiConnectionStatus({ message: 'تم الاتصال بنجاح ✓', type: 'success' });
+
+                // Close modal after a short delay
+                setTimeout(() => {
+                    closeAISettingsModal();
+                    showToast('تم حفظ الإعدادات بنجاح', 'success');
+                }, 1000);
+            } else {
+                setAiConnectionStatus({ message: `فشل الاتصال: ${result.error}`, type: 'error' });
+            }
+        } else {
+            // API key not changed, just save toggle settings
+            const newSettings = {
+                apiKey: newApiKey,
+                enhanceSubjectName: tempAiSettings.enhanceSubjectName,
+                enhanceSubject: tempAiSettings.enhanceSubject
+            };
+            setAiSettings(newSettings);
+            localStorage.setItem('autowriter_ai_settings', JSON.stringify(newSettings));
+            closeAISettingsModal();
+            showToast('تم حفظ الإعدادات', 'success');
+        }
+    };
+
+    // Enhance text using Gemini AI
+    const enhanceText = async () => {
+        if (!aiSettings.apiKey) {
+            showToast('يرجى إضافة مفتاح API في الإعدادات', 'error');
+            openAISettingsModal();
+            return;
+        }
+
+        if (!aiSettings.enhanceSubjectName && !aiSettings.enhanceSubject) {
+            showToast('يرجى تفعيل حقل واحد على الأقل للتحسين', 'error');
+            return;
+        }
+
+        setIsEnhancing(true);
+
+        try {
+            const enhanceField = async (text, fieldType, retries = 3) => {
+                if (!text.trim()) return text;
+
+                const prompt = fieldType === 'title'
+                    ? `أعد صياغة عنوان الموضوع التالي بأسلوب رسمي واحترافي باللغة العربية الفصحى، مناسب للمراسلات الرسمية. أعطني العنوان المحسن فقط بدون أي شرح أو تعليق:\n\n${text}`
+                    : `أعد صياغة النص التالي بأسلوب رسمي واحترافي باللغة العربية الفصحى، مناسب للمراسلات الرسمية. حافظ على المعنى الأصلي مع تحسين الصياغة والبلاغة. أعطني النص المحسن فقط بدون أي شرح أو تعليق:\n\n${text}`;
+
+                for (let attempt = 1; attempt <= retries; attempt++) {
+                    try {
+                        const response = await fetch(
+                            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${aiSettings.apiKey}`,
+                            {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    contents: [{ parts: [{ text: prompt }] }]
+                                })
+                            }
+                        );
+
+                        if (response.status === 429) {
+                            // Rate limited - wait and retry
+                            if (attempt < retries) {
+                                const waitTime = Math.pow(2, attempt) * 1000; // Exponential backoff
+                                await new Promise(resolve => setTimeout(resolve, waitTime));
+                                continue;
+                            }
+                            throw new Error('تم تجاوز حد الطلبات، حاول مرة أخرى بعد قليل');
+                        }
+
+                        if (response.status === 503) {
+                            // Server unavailable - wait and retry
+                            if (attempt < retries) {
+                                await new Promise(resolve => setTimeout(resolve, 2000));
+                                continue;
+                            }
+                            throw new Error('الخادم مشغول، حاول مرة أخرى');
+                        }
+
+                        if (!response.ok) {
+                            throw new Error('فشل في تحسين النص');
+                        }
+
+                        const data = await response.json();
+                        const enhancedText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                        return enhancedText?.trim() || text;
+                    } catch (error) {
+                        if (attempt === retries) throw error;
+                        // Wait before retry
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                    }
+                }
+                return text;
+            };
+
+            let updatedFormData = { ...formData };
+
+            // Persistent prefixes that should not be changed by AI
+            const subjectNamePrefix = 'الموضوع / ';
+            const subjectPrefix = 'في البَدْء نهديكم أطيب التحايا متمنين لكم النجاح في مهامكم العملية وإشارة إلى الموضوع أعلاه،‏ ';
+
+            if (aiSettings.enhanceSubjectName && formData.subject_name.trim()) {
+                let textToEnhance = formData.subject_name;
+                let prefix = '';
+
+                // Check if text starts with persistent prefix
+                if (textToEnhance.startsWith(subjectNamePrefix)) {
+                    prefix = subjectNamePrefix;
+                    textToEnhance = textToEnhance.slice(subjectNamePrefix.length);
+                }
+
+                if (textToEnhance.trim()) {
+                    const enhanced = await enhanceField(textToEnhance, 'title');
+                    updatedFormData.subject_name = prefix + enhanced;
+                }
+            }
+
+            if (aiSettings.enhanceSubject && formData.subject.trim()) {
+                let textToEnhance = formData.subject;
+                let prefix = '';
+
+                // Check if text starts with persistent prefix
+                if (textToEnhance.startsWith(subjectPrefix)) {
+                    prefix = subjectPrefix;
+                    textToEnhance = textToEnhance.slice(subjectPrefix.length);
+                }
+
+                if (textToEnhance.trim()) {
+                    const enhanced = await enhanceField(textToEnhance, 'body');
+                    updatedFormData.subject = prefix + enhanced;
+                }
+            }
+
+            // Save original text before enhancement for undo functionality
+            const historyUpdate = {
+                originalSubjectName: aiSettings.enhanceSubjectName ? formData.subject_name : null,
+                originalSubject: aiSettings.enhanceSubject ? formData.subject : null,
+                enhancedSubjectName: null,
+                enhancedSubject: null,
+                isUndone: false,
+                hasHistory: false
+            };
+
+            setFormData(updatedFormData);
+
+            // Store enhanced text in history
+            historyUpdate.enhancedSubjectName = aiSettings.enhanceSubjectName ? updatedFormData.subject_name : null;
+            historyUpdate.enhancedSubject = aiSettings.enhanceSubject ? updatedFormData.subject : null;
+            historyUpdate.hasHistory = true;
+            setEnhancementHistory(historyUpdate);
+
+            showToast('تم تحسين النص بنجاح ✓', 'success');
+
+        } catch (error) {
+            console.error('Enhancement error:', error);
+            showToast('حدث خطأ أثناء تحسين النص', 'error');
+        } finally {
+            setIsEnhancing(false);
+        }
+    };
+
+    // Toggle between original and enhanced text (undo/redo)
+    const toggleEnhancement = () => {
+        if (!enhancementHistory.hasHistory) return;
+
+        if (enhancementHistory.isUndone) {
+            // Redo - restore enhanced text
+            setFormData(prev => ({
+                ...prev,
+                ...(enhancementHistory.enhancedSubjectName !== null && { subject_name: enhancementHistory.enhancedSubjectName }),
+                ...(enhancementHistory.enhancedSubject !== null && { subject: enhancementHistory.enhancedSubject })
+            }));
+            setEnhancementHistory(prev => ({ ...prev, isUndone: false }));
+            showToast('تم إعادة التحسين', 'success');
+        } else {
+            // Undo - restore original text
+            setFormData(prev => ({
+                ...prev,
+                ...(enhancementHistory.originalSubjectName !== null && { subject_name: enhancementHistory.originalSubjectName }),
+                ...(enhancementHistory.originalSubject !== null && { subject: enhancementHistory.originalSubject })
+            }));
+            setEnhancementHistory(prev => ({ ...prev, isUndone: true }));
+            showToast('تم التراجع عن التحسين', 'info');
+        }
+    };
+
+    // ============== Voice Recording Functions (Android Native STT) ==============
+
+    // Ref to track recording state (avoid stale closures)
+    const isRecordingRef = useRef(false);
+
+    // Start voice recording with native Android SpeechRecognizer
+    const startRecording = async () => {
+        try {
+            // Dynamically import the speech recognition plugin
+            const { SpeechRecognition } = await import('@capgo/capacitor-speech-recognition');
+
+            // Check if speech recognition is available
+            const { available } = await SpeechRecognition.available();
+            if (!available) {
+                showToast('التعرف على الكلام غير متاح على هذا الجهاز', 'error');
+                return;
+            }
+
+            // Request permissions
+            const permissionStatus = await SpeechRecognition.requestPermissions();
+            if (permissionStatus.speechRecognition !== 'granted') {
+                showToast('يرجى السماح بالوصول للميكروفون', 'error');
+                return;
+            }
+
+            // Set recording state
+            setIsRecording(true);
+            isRecordingRef.current = true;
+            setRecordingTime(0);
+
+            // Save the current subject text before recording
+            const baseSubject = formData.subject || '';
+
+            // Start timer
+            recordingIntervalRef.current = setInterval(() => {
+                setRecordingTime(prev => prev + 1);
+            }, 1000);
+
+            // Listen for partial results - append to subject field
+            await SpeechRecognition.addListener('partialResults', (data) => {
+                if (data.matches && data.matches.length > 0 && isRecordingRef.current) {
+                    const spokenText = data.matches[0].trim();
+
+                    // Update subject field: base + spoken text
+                    const fullText = baseSubject ? `${baseSubject} ${spokenText}` : spokenText;
+
+                    setFormData(prev => ({
+                        ...prev,
+                        subject: fullText
+                    }));
+                }
+            });
+
+            // Listen for when Android auto-stops (silence timeout) - reset UI
+            await SpeechRecognition.addListener('listeningState', (state) => {
+                if (state.status === 'stopped' && isRecordingRef.current) {
+                    // Android stopped listening - reset UI
+                    isRecordingRef.current = false;
+                    setIsRecording(false);
+
+                    if (recordingIntervalRef.current) {
+                        clearInterval(recordingIntervalRef.current);
+                        recordingIntervalRef.current = null;
+                    }
+                    setRecordingTime(0);
+
+                    showToast('تم تحويل الصوت بنجاح ✓', 'success');
+                }
+            });
+
+            // Start speech recognition with Arabic language
+            await SpeechRecognition.start({
+                language: 'ar-SA',
+                partialResults: true,
+                popup: false
+            });
+
+
+        } catch (error) {
+            console.error('Recording error:', error);
+            showToast('لم يتم السماح بالوصول للميكروفون', 'error');
+            cleanupRecording();
+        }
+    };
+
+    // Stop recording and finalize transcription
+    const stopRecording = async () => {
+        if (!isRecordingRef.current) return;
+
+        isRecordingRef.current = false;
+        setIsRecording(false);
+
+        try {
+            const { SpeechRecognition } = await import('@capgo/capacitor-speech-recognition');
+            await SpeechRecognition.stop();
+            await SpeechRecognition.removeAllListeners();
+            showToast('تم تحويل الصوت بنجاح ✓', 'success');
+        } catch (error) {
+            console.error('Stop recording error:', error);
+        }
+
+        // Clear timer
+        if (recordingIntervalRef.current) {
+            clearInterval(recordingIntervalRef.current);
+            recordingIntervalRef.current = null;
+        }
+        setRecordingTime(0);
+    };
+
+    // Cleanup recording resources
+    const cleanupRecording = async () => {
+        try {
+            const { SpeechRecognition } = await import('@capgo/capacitor-speech-recognition');
+            await SpeechRecognition.stop();
+            await SpeechRecognition.removeAllListeners();
+        } catch (e) {
+            // Ignore errors during cleanup
+        }
+
+        if (recordingIntervalRef.current) {
+            clearInterval(recordingIntervalRef.current);
+            recordingIntervalRef.current = null;
+        }
+
+        setIsRecording(false);
+        isRecordingRef.current = false;
+        setRecordingTime(0);
+    };
+
+    // Format recording time
+    const formatRecordingTime = (seconds) => {
+        const mins = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
 
     // Handle logo selection
@@ -3426,22 +3867,128 @@ function App() {
                                     value={formData.subject_name}
                                     onChange={handleChange}
                                     placeholder="عنوان الموضوع"
-                                    className="prefilled"
+                                    className={`prefilled ${isEnhancing && aiSettings.enhanceSubjectName ? 'ai-enhancing' : ''}`}
+                                    disabled={isEnhancing && aiSettings.enhanceSubjectName}
                                 />
                             </div>
                         </div>
                         <div className="form-row">
                             <div className="form-group full-width">
-                                <label htmlFor="subject">الموضوع:</label>
-                                <textarea
-                                    id="subject"
-                                    name="subject"
-                                    value={formData.subject}
-                                    onChange={handleChange}
-                                    placeholder="نص الرسالة..."
-                                    rows={6}
-                                    className="prefilled"
-                                />
+                                <div className="subject-label-row">
+                                    <div className="ai-buttons">
+                                        {/* Gear Settings Button */}
+                                        <button
+                                            type="button"
+                                            className="ai-settings-btn"
+                                            onClick={openAISettingsModal}
+                                            title="إعدادات الذكاء الاصطناعي"
+                                        >
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                <circle cx="12" cy="12" r="3" />
+                                                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                                            </svg>
+                                        </button>
+                                        {/* Enhance Button with Gemini Sparkle */}
+                                        <button
+                                            type="button"
+                                            className={`ai-enhance-btn ${isEnhancing ? 'loading' : ''}`}
+                                            onClick={enhanceText}
+                                            disabled={isEnhancing}
+                                            title="تحسين النص بالذكاء الاصطناعي"
+                                        >
+                                            <svg className="gemini-sparkle" viewBox="0 0 24 24" fill="currentColor">
+                                                <path d="M12 0L14.59 9.41L24 12L14.59 14.59L12 24L9.41 14.59L0 12L9.41 9.41L12 0Z" />
+                                            </svg>
+                                            <span>{isEnhancing ? 'جاري التحسين...' : 'تحسين'}</span>
+                                        </button>
+                                        {/* Undo/Redo Enhancement Button */}
+                                        {enhancementHistory.hasHistory && (
+                                            <button
+                                                type="button"
+                                                className={`ai-undo-btn ${enhancementHistory.isUndone ? 'redo' : 'undo'}`}
+                                                onClick={toggleEnhancement}
+                                                title={enhancementHistory.isUndone ? 'إعادة التحسين' : 'تراجع عن التحسين'}
+                                            >
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                    {enhancementHistory.isUndone ? (
+                                                        // Redo icon
+                                                        <><path d="M21 7v6h-6" /><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6.36 2.64L21 13" /></>
+                                                    ) : (
+                                                        // Undo icon
+                                                        <><path d="M3 7v6h6" /><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.36 2.64L3 13" /></>
+                                                    )}
+                                                </svg>
+                                                <span>{enhancementHistory.isUndone ? 'إعادة التحسين' : 'تراجع عن التحسين'}</span>
+                                            </button>
+                                        )}
+                                    </div>
+                                    <label htmlFor="subject">الموضوع:</label>
+                                </div>
+                                <div className="textarea-with-voice">
+                                    <textarea
+                                        id="subject"
+                                        name="subject"
+                                        value={formData.subject}
+                                        onChange={handleChange}
+                                        placeholder="نص الرسالة..."
+                                        rows={6}
+                                        className={`prefilled ${isEnhancing && aiSettings.enhanceSubject ? 'ai-enhancing' : ''}`}
+                                        disabled={isEnhancing && aiSettings.enhanceSubject}
+                                    />
+                                    {/* Voice Recording Button - Android Only */}
+                                    {isAndroid && (
+                                        <div className="voice-record-container">
+                                            {isRecording ? (
+                                                // Recording active - show waveform and stop button
+                                                <div className="voice-recording-active">
+                                                    <div className="waveform-container">
+                                                        <div className="waveform-bars">
+                                                            {[...Array(5)].map((_, i) => (
+                                                                <div
+                                                                    key={i}
+                                                                    className="waveform-bar recording"
+                                                                    style={{
+                                                                        animationDelay: `${i * 0.1}s`
+                                                                    }}
+                                                                />
+                                                            ))}
+                                                        </div>
+                                                        <span className="recording-time">{formatRecordingTime(recordingTime)}</span>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        className="voice-stop-btn"
+                                                        onClick={stopRecording}
+                                                        title="إيقاف التسجيل"
+                                                    >
+                                                        <svg viewBox="0 0 24 24" fill="currentColor">
+                                                            <rect x="6" y="6" width="12" height="12" rx="2" />
+                                                        </svg>
+                                                    </button>
+                                                </div>
+                                            ) : isTranscribing ? (
+                                                // Transcribing - show loading
+                                                <div className="voice-transcribing">
+                                                    <div className="transcribing-spinner"></div>
+                                                    <span>جاري التحويل...</span>
+                                                </div>
+                                            ) : (
+                                                // Idle - show mic button
+                                                <button
+                                                    type="button"
+                                                    className="voice-record-btn"
+                                                    onClick={startRecording}
+                                                    title="تسجيل صوتي"
+                                                >
+                                                    <svg viewBox="0 0 24 24" fill="currentColor">
+                                                        <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
+                                                        <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
+                                                    </svg>
+                                                </button>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
                                 <div style={{ marginTop: '10px' }}>
                                     <label className="checkbox-label">
                                         <input
@@ -3681,6 +4228,63 @@ function App() {
                                 إلغاء
                             </button>
                         )}
+                    </div>
+                </div>
+            )}
+
+            {/* AI Settings Modal */}
+            {showAISettingsModal && (
+                <div className={`ai-settings-overlay ${isClosingModal ? 'closing' : ''}`} onClick={closeAISettingsModal}>
+                    <div className={`ai-settings-modal ${isClosingModal ? 'closing' : ''}`} onClick={(e) => e.stopPropagation()}>
+                        <h3>
+                            <svg className="modal-icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0L14.59 9.41L24 12L14.59 14.59L12 24L9.41 14.59L0 12L9.41 9.41L12 0Z" />
+                            </svg>
+                            إعدادات الذكاء الاصطناعي
+                        </h3>
+                        <div className="ai-settings-field">
+                            <label>مفتاح API لـ Gemini:</label>
+                            <input
+                                type="password"
+                                value={tempAiSettings.apiKey}
+                                onChange={(e) => setTempAiSettings(prev => ({ ...prev, apiKey: e.target.value }))}
+                                placeholder="أدخل مفتاح API هنا..."
+                                dir="rtl"
+                            />
+                        </div>
+                        <div className="ai-settings-toggles">
+                            <label className="ai-toggle">
+                                <input
+                                    type="checkbox"
+                                    checked={tempAiSettings.enhanceSubjectName}
+                                    onChange={(e) => setTempAiSettings(prev => ({ ...prev, enhanceSubjectName: e.target.checked }))}
+                                />
+                                <span className="toggle-slider"></span>
+                                <span className="toggle-label">تحسين عنوان الموضوع</span>
+                            </label>
+                            <label className="ai-toggle">
+                                <input
+                                    type="checkbox"
+                                    checked={tempAiSettings.enhanceSubject}
+                                    onChange={(e) => setTempAiSettings(prev => ({ ...prev, enhanceSubject: e.target.checked }))}
+                                />
+                                <span className="toggle-slider"></span>
+                                <span className="toggle-label">تحسين الموضوع</span>
+                            </label>
+                        </div>
+                        {aiConnectionStatus.message && (
+                            <div className={`ai-connection-status ${aiConnectionStatus.type}`}>
+                                {aiConnectionStatus.message}
+                            </div>
+                        )}
+                        <div className="ai-settings-buttons">
+                            <button className="ai-save-btn" onClick={saveAISettings}>
+                                حفظ
+                            </button>
+                            <button className="ai-cancel-btn" onClick={closeAISettingsModal}>
+                                إلغاء
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
