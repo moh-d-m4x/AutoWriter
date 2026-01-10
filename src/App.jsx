@@ -125,6 +125,7 @@ function App() {
     const [recordingTime, setRecordingTime] = useState(0);
     const [isTranscribing, setIsTranscribing] = useState(false);
     const [liveTranscript, setLiveTranscript] = useState('');
+    const [focusedField, setFocusedField] = useState(null); // Track which field is focused for STT
     const recordingIntervalRef = useRef(null);
 
     // Show toast notification
@@ -924,6 +925,12 @@ function App() {
 
     // Start voice recording with native Android SpeechRecognizer
     const startRecording = async () => {
+        // Check if a field is focused
+        if (!focusedField) {
+            showToast('يرجى اختيار حقل للكتابة فيه أولاً', 'info');
+            return;
+        }
+
         try {
             // Dynamically import the speech recognition plugin
             const { SpeechRecognition } = await import('@capgo/capacitor-speech-recognition');
@@ -947,25 +954,26 @@ function App() {
             isRecordingRef.current = true;
             setRecordingTime(0);
 
-            // Save the current subject text before recording
-            const baseSubject = formData.subject || '';
+            // Save the current field text before recording
+            const targetField = focusedField;
+            const baseText = formData[targetField] || '';
 
             // Start timer
             recordingIntervalRef.current = setInterval(() => {
                 setRecordingTime(prev => prev + 1);
             }, 1000);
 
-            // Listen for partial results - append to subject field
+            // Listen for partial results - append to focused field
             await SpeechRecognition.addListener('partialResults', (data) => {
                 if (data.matches && data.matches.length > 0 && isRecordingRef.current) {
                     const spokenText = data.matches[0].trim();
 
-                    // Update subject field: base + spoken text
-                    const fullText = baseSubject ? `${baseSubject} ${spokenText}` : spokenText;
+                    // Update the focused field: base + spoken text
+                    const fullText = baseText ? `${baseText} ${spokenText}` : spokenText;
 
                     setFormData(prev => ({
                         ...prev,
-                        subject: fullText
+                        [targetField]: fullText
                     }));
                 }
             });
@@ -3778,6 +3786,8 @@ function App() {
                                     name="parent_company"
                                     value={formData.parent_company}
                                     onChange={handleChange}
+                                    onFocus={() => setFocusedField('parent_company')}
+                                    onBlur={() => setFocusedField(null)}
                                     placeholder="الشركة الأم"
                                     className="persistent"
                                 />
@@ -3790,6 +3800,8 @@ function App() {
                                     name="subsidiary_company"
                                     value={formData.subsidiary_company}
                                     onChange={handleChange}
+                                    onFocus={() => setFocusedField('subsidiary_company')}
+                                    onBlur={() => setFocusedField(null)}
                                     placeholder="الشركة الفرعية"
                                     className="persistent"
                                 />
@@ -3802,6 +3814,8 @@ function App() {
                                     name="from"
                                     value={formData.from}
                                     onChange={handleChange}
+                                    onFocus={() => setFocusedField('from')}
+                                    onBlur={() => setFocusedField(null)}
                                     placeholder="اسم الجهة المرسلة"
                                     className="persistent"
                                 />
@@ -3821,6 +3835,8 @@ function App() {
                                     name="to"
                                     value={formData.to}
                                     onChange={handleChange}
+                                    onFocus={() => setFocusedField('to')}
+                                    onBlur={() => setFocusedField(null)}
                                     placeholder="اسم المستلم"
                                     className="prefilled"
                                 />
@@ -3833,6 +3849,8 @@ function App() {
                                     name="to_the"
                                     value={formData.to_the}
                                     onChange={handleChange}
+                                    onFocus={() => setFocusedField('to_the')}
+                                    onBlur={() => setFocusedField(null)}
                                     placeholder="منصب المستلم"
                                     className="prefilled"
                                 />
@@ -3852,6 +3870,8 @@ function App() {
                                     name="greetings"
                                     value={formData.greetings}
                                     onChange={handleChange}
+                                    onFocus={() => setFocusedField('greetings')}
+                                    onBlur={() => setFocusedField(null)}
                                     placeholder="مثال: السلام عليكم ورحمة الله وبركاته"
                                     className="persistent"
                                 />
@@ -3866,6 +3886,8 @@ function App() {
                                     name="subject_name"
                                     value={formData.subject_name}
                                     onChange={handleChange}
+                                    onFocus={() => setFocusedField('subject_name')}
+                                    onBlur={() => setFocusedField(null)}
                                     placeholder="عنوان الموضوع"
                                     className={`prefilled ${isEnhancing && aiSettings.enhanceSubjectName ? 'ai-enhancing' : ''}`}
                                     disabled={isEnhancing && aiSettings.enhanceSubjectName}
@@ -3930,76 +3952,26 @@ function App() {
                                         name="subject"
                                         value={formData.subject}
                                         onChange={handleChange}
+                                        onFocus={() => setFocusedField('subject')}
+                                        onBlur={() => setFocusedField(null)}
                                         placeholder="نص الرسالة..."
                                         rows={6}
                                         className={`prefilled ${isEnhancing && aiSettings.enhanceSubject ? 'ai-enhancing' : ''}`}
                                         disabled={isEnhancing && aiSettings.enhanceSubject}
                                     />
-                                    {/* Voice Recording Button - Android Only */}
-                                    {isAndroid && (
-                                        <div className="voice-record-container">
-                                            {isRecording ? (
-                                                // Recording active - show waveform and stop button
-                                                <div className="voice-recording-active">
-                                                    <div className="waveform-container">
-                                                        <div className="waveform-bars">
-                                                            {[...Array(5)].map((_, i) => (
-                                                                <div
-                                                                    key={i}
-                                                                    className="waveform-bar recording"
-                                                                    style={{
-                                                                        animationDelay: `${i * 0.1}s`
-                                                                    }}
-                                                                />
-                                                            ))}
-                                                        </div>
-                                                        <span className="recording-time">{formatRecordingTime(recordingTime)}</span>
-                                                    </div>
-                                                    <button
-                                                        type="button"
-                                                        className="voice-stop-btn"
-                                                        onClick={stopRecording}
-                                                        title="إيقاف التسجيل"
-                                                    >
-                                                        <svg viewBox="0 0 24 24" fill="currentColor">
-                                                            <rect x="6" y="6" width="12" height="12" rx="2" />
-                                                        </svg>
-                                                    </button>
-                                                </div>
-                                            ) : isTranscribing ? (
-                                                // Transcribing - show loading
-                                                <div className="voice-transcribing">
-                                                    <div className="transcribing-spinner"></div>
-                                                    <span>جاري التحويل...</span>
-                                                </div>
-                                            ) : (
-                                                // Idle - show mic button
-                                                <button
-                                                    type="button"
-                                                    className="voice-record-btn"
-                                                    onClick={startRecording}
-                                                    title="تسجيل صوتي"
-                                                >
-                                                    <svg viewBox="0 0 24 24" fill="currentColor">
-                                                        <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
-                                                        <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
-                                                    </svg>
-                                                </button>
-                                            )}
-                                        </div>
-                                    )}
-                                </div>
-                                <div style={{ marginTop: '10px' }}>
-                                    <label className="checkbox-label">
-                                        <input
-                                            type="checkbox"
-                                            name="useTable"
-                                            checked={formData.useTable || false}
-                                            onChange={handleChange}
-                                        />
-                                        <span className="checkmark"></span>
-                                        <span>استخدام جدول</span>
-                                    </label>
+                                    {/* Use Table Checkbox */}
+                                    <div style={{ marginTop: '10px' }}>
+                                        <label className="checkbox-label" style={{ width: 'fit-content' }}>
+                                            <input
+                                                type="checkbox"
+                                                name="useTable"
+                                                checked={formData.useTable || false}
+                                                onChange={handleChange}
+                                            />
+                                            <span className="checkmark"></span>
+                                            <span>استخدام جدول</span>
+                                        </label>
+                                    </div>
                                 </div>
 
                                 {formData.useTable && (
@@ -4057,6 +4029,8 @@ function App() {
                                     name="ending"
                                     value={formData.ending}
                                     onChange={handleChange}
+                                    onFocus={() => setFocusedField('ending')}
+                                    onBlur={() => setFocusedField(null)}
                                     placeholder="مثال: وتقبلوا فائق الاحترام والتقدير"
                                     className="persistent"
                                 />
@@ -4068,6 +4042,8 @@ function App() {
                                     name="sign"
                                     value={formData.sign}
                                     onChange={handleChange}
+                                    onFocus={() => setFocusedField('sign')}
+                                    onBlur={() => setFocusedField(null)}
                                     placeholder="اسم الموقع"
                                     className="persistent"
                                     rows={2}
@@ -4082,6 +4058,8 @@ function App() {
                                     name="copy_to"
                                     value={formData.copy_to}
                                     onChange={handleChange}
+                                    onFocus={() => setFocusedField('copy_to')}
+                                    onBlur={() => setFocusedField(null)}
                                     placeholder="الجهات المنسوخ إليها (اضغط Enter لسطر جديد)"
                                     className="persistent"
                                     rows={3}
@@ -4167,6 +4145,57 @@ function App() {
                 </svg>
             </button>
 
+            {/* Floating Record Button - Android Only */}
+            {isAndroid && (
+                <div className="floating-record-container" style={{ pointerEvents: !focusedField && !isRecording && !isTranscribing ? 'none' : 'auto' }}>
+                    {isRecording ? (
+                        // Recording active - show waveform and stop button
+                        <div className="floating-recording-active">
+                            <div className="floating-waveform">
+                                {[...Array(5)].map((_, i) => (
+                                    <div
+                                        key={i}
+                                        className="waveform-bar recording"
+                                        style={{ animationDelay: `${i * 0.1}s` }}
+                                    />
+                                ))}
+                            </div>
+                            <span className="floating-recording-time">{formatRecordingTime(recordingTime)}</span>
+                            <button
+                                type="button"
+                                className="floating-stop-btn"
+                                onClick={stopRecording}
+                                title="إيقاف التسجيل"
+                            >
+                                <svg viewBox="0 0 24 24" fill="currentColor">
+                                    <rect x="6" y="6" width="12" height="12" rx="2" />
+                                </svg>
+                            </button>
+                        </div>
+                    ) : isTranscribing ? (
+                        // Transcribing - show loading
+                        <div className="floating-transcribing">
+                            <div className="transcribing-spinner"></div>
+                        </div>
+                    ) : (
+                        // Idle - show mic button (disabled if no field focused)
+                        <button
+                            type="button"
+                            className={`floating-record-btn ${!focusedField ? 'disabled' : ''}`}
+                            onClick={startRecording}
+                            onMouseDown={(e) => e.preventDefault()}
+                            disabled={!focusedField}
+                            title={focusedField ? "تسجيل صوتي" : "اختر حقلاً للكتابة أولاً"}
+                        >
+                            <svg viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
+                                <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
+                            </svg>
+                        </button>
+                    )}
+                </div>
+            )}
+
             {/* Loading Overlay with Progress Arc */}
             {isExporting && (
                 <div className="loading-overlay">
@@ -4244,13 +4273,30 @@ function App() {
                         </h3>
                         <div className="ai-settings-field">
                             <label>مفتاح API لـ Gemini:</label>
-                            <input
-                                type="password"
-                                value={tempAiSettings.apiKey}
-                                onChange={(e) => setTempAiSettings(prev => ({ ...prev, apiKey: e.target.value }))}
-                                placeholder="أدخل مفتاح API هنا..."
-                                dir="rtl"
-                            />
+                            <div className="api-key-input-wrapper">
+                                <input
+                                    type="password"
+                                    value={tempAiSettings.apiKey}
+                                    onChange={(e) => setTempAiSettings(prev => ({ ...prev, apiKey: e.target.value }))}
+                                    placeholder="أدخل مفتاح API هنا..."
+                                    dir="rtl"
+                                />
+                                <button
+                                    type="button"
+                                    className="api-info-btn"
+                                    onClick={async () => {
+                                        try {
+                                            const { Browser } = await import('@capacitor/browser');
+                                            await Browser.open({ url: 'https://aistudio.google.com/api-keys' });
+                                        } catch (e) {
+                                            window.open('https://aistudio.google.com/api-keys', '_blank');
+                                        }
+                                    }}
+                                    title="احصل على مفتاح API"
+                                >
+                                    !
+                                </button>
+                            </div>
                         </div>
                         <div className="ai-settings-toggles">
                             <label className="ai-toggle">

@@ -33,10 +33,6 @@ echo [3/6] Cleaning old Android assets...
 if exist "android\app\src\main\assets\public\assets" (
     rmdir /s /q "android\app\src\main\assets\public\assets"
 )
-:: Clean build folder assets
-if exist "C:\AutoWriter_Build\android\app\src\main\assets\public\assets" (
-    rmdir /s /q "C:\AutoWriter_Build\android\app\src\main\assets\public\assets"
-)
 echo √ Old assets cleaned
 echo.
 
@@ -51,7 +47,7 @@ echo √ Capacitor sync complete
 echo.
 
 echo [5/6] Building Android Debug APK...
-cd C:\AutoWriter_Build\android
+cd /d "%~dp0android"
 call gradlew.bat clean
 call gradlew.bat assembleDebug
 if %errorlevel% neq 0 (
@@ -65,7 +61,7 @@ echo.
 echo [6/6] Copying to release folder...
 cd /d "%~dp0"
 if exist "release\apk\AutoWriter-1.1.0.apk" del /q "release\apk\AutoWriter-1.1.0.apk"
-copy /y "C:\AutoWriter_Build\android\app\build\outputs\apk\debug\app-debug.apk" "release\apk\AutoWriter-1.1.0.apk"
+copy /y "android\app\build\outputs\apk\debug\app-debug.apk" "release\apk\AutoWriter-1.1.0.apk"
 echo √ Release ready
 echo.
 
